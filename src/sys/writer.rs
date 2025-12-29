@@ -74,9 +74,8 @@ impl VaultWriter {
 
         let nonce = XNonce::from_slice(&nbytes);
 
-        cipher.encrypt_in_place(nonce, &[], &mut inner).unwrap();
-
-
+        cipher.encrypt_in_place(nonce, &[], &mut inner)
+            .map_err(|_| anyhow!("Failed to encrypt the vault contents in place."))?;
 
         let mut file = File::create(&self.path)?;
         file.write_all(b"NOVO")?;

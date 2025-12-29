@@ -84,12 +84,12 @@ impl UserVaultKey {
 
 fn get_password(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
     let params = Params::new(64 * 1024, 2, 1, Some(32))
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("Failed to initialize Argon2id parameters: {e:?}"))?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
     let mut out = [0u8; 32];
     argon2.hash_password_into(passphrase.as_bytes(), salt, &mut out)
-        .unwrap();
+        .map_err(|e| anyhow!("Failed to hash Argon2id password: {e:?}"))?;
 
     Ok(out)
 }
@@ -191,7 +191,6 @@ fn generate_wrapped_mk(
     master: &MasterVaultKey
 ) -> Result<WrappedKey> {
 
-    // println!("Key1: {:?}", key.key);
     let key = Key::from_slice(&rkey.key);
     let cipher = XChaCha20Poly1305::new(&key);
 
@@ -200,9 +199,8 @@ fn generate_wrapped_mk(
     rand::fill(&mut nbytes);
 
 
-    let result = cipher.encrypt(XNonce::from_slice(&nbytes), &master.key as &[u8]).unwrap();
-
-    // println!("Reso: {:?}", result);
+    let result = cipher.encrypt(XNonce::from_slice(&nbytes), &master.key as &[u8])
+        .map_err(|_| anyhow!("Failed to encrypt the new wrapped key."))?;
 
     Ok(WrappedKey {
         salt: rkey.salt,
