@@ -3,7 +3,7 @@ use clap::Parser;
 use crate::{
     cli::Args,
     sys::{
-        common::{link, pull, seal_full, sync, unseal},
+        common::{link, open, pull, seal_full, sync, unseal},
         init::run_init,
     },
 };
@@ -22,6 +22,7 @@ fn run_subcommand() -> Result<()> {
         Args::Sync { target } => sync(target),
         Args::Link { target, url } => link(target, &url),
         Args::Pull { target, url } => pull(target, &url),
+        Args::Open { target } => open(target)
     }
 }
 

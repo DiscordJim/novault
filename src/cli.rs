@@ -44,6 +44,14 @@ pub(crate) enum Args {
         target: String,
         /// The git url (SSH-form) to pull from.
         url: String
+    },
+    /// Opens the vault for editing, when the process closes it
+    /// will automatically seal again. This is highly recommended instead
+    /// of manually sealing and unsealing.
+    Open {
+        #[arg(short, long, default_value="")]
+        /// The target directory.
+        target: String,
     }
 }
 

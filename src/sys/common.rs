@@ -1,15 +1,29 @@
 use anyhow::{Result, anyhow};
 use colorize::AnsiColor;
+use crossterm::{
+    event::{Event, KeyCode, KeyModifiers, read},
+    terminal::{disable_raw_mode, enable_raw_mode},
+};
 use serde::Deserialize;
 use std::{
-    env, fs::{self, File}, io::{Cursor, Write, stdout}, path::Path
+    env,
+    fs::{self, File},
+    io::{Cursor, Write, stdout},
+    path::Path,
 };
 use zip::ZipArchive;
 
 use crate::{
     console_log,
     sys::{
-        filter::{FilterDecision, NovFilter}, mk::{CachedPassword, MasterVaultKey, WrappedKey}, process::{add_remote_origin, git_add_all, git_branch_main, git_clone, git_commit_all, git_push_origin}, statefile::StateFile, writer::{VaultWriter, decrypt}
+        filter::{FilterDecision, NovFilter},
+        mk::{CachedPassword, MasterVaultKey, WrappedKey},
+        process::{
+            add_remote_origin, git_add_all, git_branch_main, git_clone, git_commit_all,
+            git_push_origin,
+        },
+        statefile::StateFile,
+        writer::{VaultWriter, decrypt},
     },
 };
 
@@ -20,7 +34,6 @@ pub enum NovState {
     Sealed,
     Unsealed,
 }
-
 
 /// Checks if there is an existing metadata directory at the
 /// target location.
@@ -155,27 +168,20 @@ fn get_repo_state(root: impl AsRef<Path>) -> Result<NovState> {
 pub fn seal_full(root: impl AsRef<Path>) -> Result<()> {
     let path = root.as_ref();
     let mut usr_input = get_password_with_prompt(false)?;
-    
+
     seal_with_pwd(path, &mut usr_input)?;
-    
 
     Ok(())
 }
 
-fn seal_with_pwd(
-    root: impl AsRef<Path>,
-    password: &mut CachedPassword
-) -> Result<()> {
+fn seal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Result<()> {
     let path = root.as_ref();
     let state_file = StateFile::new(path);
 
     // Get the wrapped key.
     let wrapped = state_file.get_mk()?;
 
-
     let (new_wrap, master) = wrapped.get_master_key(password)?;
-
-
 
     match state_file.get_state()? {
         NovState::Unsealed => {}
@@ -230,28 +236,21 @@ pub fn unseal(root: impl AsRef<Path>) -> Result<()> {
         ));
     }
 
-
     let mut password = prompt_password(false)?;
 
     // Now we perform an unseal with the password.
     unseal_with_pwd(path, &mut password)?;
-    
 
     Ok(())
 }
 
-
-fn unseal_with_pwd(
-    root: impl AsRef<Path>,
-    password: &mut CachedPassword
-) -> Result<()> {
+fn unseal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Result<()> {
     let path = root.as_ref();
     let vault_path = path.join("vault.bin");
 
     let state_file = StateFile::new(path);
 
     let wrapped = state_file.get_mk()?;
-
 
     let master = wrapped.get_master_key_with_no_rewrap(password)?;
 
@@ -305,67 +304,157 @@ fn unseal_with_pwd(
     state_file.set_state(NovState::Unsealed)?;
     // write_meta_status(path, b"unsealed")?;
 
-
-
-
-
     Ok(())
 }
-
 
 /// Performs a sync, which basically detects which mode
 /// we are currently in.
 pub fn sync(root: impl AsRef<Path>) -> Result<()> {
-    
-    require_seal(root.as_ref(), |sf| {
-        match sf.get_remote()? {
+    require_seal(
+        root.as_ref(),
+        |sf| match sf.get_remote()? {
             Some(_) => Ok(()),
-            None => Err(anyhow!("The remote URL is not set. Please run link first."))
-        }  
-    }, || { 
-        
-        console_log!(Info, "Performing synchronization...");
+            None => Err(anyhow!("The remote URL is not set. Please run link first.")),
+        },
+        || {
+            console_log!(Info, "Performing synchronization...");
 
-        git_add_all(root.as_ref())?;
-        git_commit_all(root.as_ref())?;
-        git_push_origin(root.as_ref())?;
-        
-        
-        Ok(()) })?;
+            git_add_all(root.as_ref())?;
+            git_commit_all(root.as_ref())?;
+            git_push_origin(root.as_ref())?;
+
+            Ok(())
+        },
+    )?;
+
+    Ok(())
+}
+
+struct TermGuard;
+
+impl TermGuard {
+    pub fn new() -> Result<Self> {
+        enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+/// This is a way
+pub fn open(root: impl AsRef<Path>) -> Result<()> {
+    if [NovState::Init, NovState::Uninit].contains(&get_repo_state(root.as_ref())?) {
+        return Err(anyhow!(
+            "The repository must be either sealed or unsealed to open it."
+        ));
+    }
+
+    let wrapped = StateFile::new(root.as_ref()).get_mk()?;
+    let mut password = fetch_password(&wrapped)?;
+
+    // Opens the internals.
+    let e = open_internal(root.as_ref(), &mut password);
+
+    if let Ok(NovState::Unsealed) = get_repo_state(root.as_ref()) {
+        seal_with_pwd(root.as_ref(), &mut password)?;
+    }
+
+    e
+}
+
+fn open_internal(root: impl AsRef<Path>, password: &mut CachedPassword) -> Result<()> {
+    let path = root.as_ref();
+
+    if get_repo_state(path)? == NovState::Sealed {
+        unseal_with_pwd(path, password)?;
+    }
+
+    console_log!(Info, "The repository is open for editing.");
+    console_log!(
+        Info,
+        "Commands:\n\t(Q) Quit and re-seal.\n\t(S) Synchronize"
+    );
+
+    let _guard = TermGuard::new();
+    loop {
+        match read()? {
+            Event::Key(key) => {
+                if key.is_press() {
+                    if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                        break;
+                    }
+                    if key.code == KeyCode::Char('s') {
+                        console_log!(Info, "Synchronizing repository with remote...");
+
+                        seal_with_pwd(path, password)?;
+
+                        git_add_all(root.as_ref())?;
+                        git_commit_all(root.as_ref())?;
+                        git_push_origin(root.as_ref())?;
+
+                        unseal_with_pwd(path, password)?;
+
+                        console_log!(Info, "Synchronization complete...");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // disable_raw_mode()?;
+    drop(_guard);
+    console_log!(Info, "Resealing the repository...");
 
     Ok(())
 }
 
 /// This is a guard that makes sure things happen in the correct order
 /// and is used for a few operations that require the seal-unseal pattern.
-fn require_seal<PF, F>(root: impl AsRef<Path>, mut pf_functor: PF, mut functor: F) -> Result<()>
-where 
+fn require_seal<PF, F>(root: impl AsRef<Path>, pf_functor: PF, functor: F) -> Result<()>
+where
     PF: FnMut(&StateFile) -> Result<()>,
-    F: FnMut() -> Result<()>
+    F: FnMut() -> Result<()>,
 {
-     let path = root.as_ref();
+    require_seal_with_retrieval(root, pf_functor, fetch_password, functor)
+
+}
+
+
+/// This is a guard that makes sure things happen in the correct order
+/// and is used for a few operations that require the seal-unseal pattern.
+fn require_seal_with_retrieval<PF, KR, F>(root: impl AsRef<Path>, mut pf_functor: PF, mut kr_functor: KR, mut functor: F) -> Result<()>
+where
+    PF: FnMut(&StateFile) -> Result<()>,
+    KR: FnMut(&WrappedKey) -> Result<CachedPassword>,
+    F: FnMut() -> Result<()>,
+{
+    let path = root.as_ref();
 
     // First we need to see if we are actually initialized.
     if !exists_metadata_directory(path) {
-        return Err(anyhow!("Tried to synchronize a directory that is not initialized yet."));
+        return Err(anyhow!(
+            "Tried to synchronize a directory that is not initialized yet."
+        ));
     }
-
-
-   
-    
 
     let state_file = StateFile::new(path);
 
-     pf_functor(&state_file)?;
-    
+    pf_functor(&state_file)?;
+
     let wrapped = state_file.get_mk()?;
-    
+
     match get_repo_state(path)? {
         NovState::Uninit => {
             return Err(anyhow!("The target is not initialized."));
         }
         NovState::Init => {
-            return Err(anyhow!("It seems that the vault is in the init state, which usually means something went terribly wrong."))
+            return Err(anyhow!(
+                "It seems that the vault is in the init state, which usually means something went terribly wrong."
+            ));
         }
         NovState::Sealed => {
             // Now we actually perform the synchronization
@@ -374,8 +463,8 @@ where
             // Ok(())
         }
         NovState::Unsealed => {
-            let mut fetch = fetch_password(&wrapped)?;
-            
+            let mut fetch = kr_functor(&wrapped)?;
+
             // Now we perform a seal with the password, this
             // prevents us being re-prompted for the password.
             seal_with_pwd(path, &mut fetch)?;
@@ -384,19 +473,16 @@ where
 
             let e = functor();
 
-
             // Now we restore the state by unsealing.
             unseal_with_pwd(path, &mut fetch)?;
 
             e?;
-
 
             // Ok(())
         }
     }
 
     Ok(())
-
 }
 
 fn parse_link(url: &str) -> Result<String> {
@@ -404,68 +490,58 @@ fn parse_link(url: &str) -> Result<String> {
     if url.starts_with("git@") {
         return Ok(url.to_string());
     } else {
-        return Err(anyhow!("We only support SSH style URLs at this time: git@github:JohnSmith/vault.git"));
+        return Err(anyhow!(
+            "We only support SSH style URLs at this time: git@github:JohnSmith/vault.git"
+        ));
     }
 }
-
 
 pub fn link(root: impl AsRef<Path>, url: &str) -> Result<()> {
     let path = root.as_ref();
 
-
     // TODO: Check to see if the repository is well-formed.
 
-    require_seal(root.as_ref(), |_| {
+    require_seal(
+        root.as_ref(),
+        |_| Ok(()),
+        || {
+            let url = parse_link(url)?;
 
+            console_log!(Info, "Adding {url} as a remote origin...");
+            add_remote_origin(path, &url)?;
 
-        Ok(())
-    }, || {
-        let url = parse_link(url)?;
+            console_log!(Info, "Switching branch to main...");
+            git_branch_main(path)?;
 
-        console_log!(Info, "Adding {url} as a remote origin...");
-        add_remote_origin(path,&url)?;
+            console_log!(Info, "Pushing initial commit to main...");
+            git_add_all(path)?;
+            git_commit_all(path)?;
+            git_push_origin(path)?;
 
-        console_log!(Info, "Switching branch to main...");
-        git_branch_main(path)?;
+            StateFile::new(path).set_remote(&url)?;
 
-        console_log!(Info, "Pushing initial commit to main...");
-        git_add_all(path)?;
-        git_commit_all(path)?;
-        git_push_origin(path)?;
+            console_log!(Info, "Succesfully linked to branch to remote!");
 
-        StateFile::new(path).set_remote(&url)?;
-
-        console_log!(Info, "Succesfully linked to branch to remote!");
-
-        Ok(())
-    })?;
-  
-
-    
-
-
+            Ok(())
+        },
+    )?;
 
     Ok(())
 }
 
 pub fn pull(root: impl AsRef<Path>, url: &str) -> Result<()> {
-
     let url = parse_link(url)?;
 
     if get_repo_state(root.as_ref())? != NovState::Uninit {
-        return Err(anyhow!("We cannot perform a pull unless the repository is uninitialized (i.e., an empty folder)."));
+        return Err(anyhow!(
+            "We cannot perform a pull unless the repository is uninitialized (i.e., an empty folder)."
+        ));
     }
 
     git_clone(root.as_ref(), &url)?;
 
-    
-
     Ok(())
 }
-
-
-
-
 
 fn get_password_with_prompt(confirm: bool) -> Result<CachedPassword> {
     print!("{} ", "PROMPT".magenta().bold());
@@ -479,10 +555,9 @@ fn get_password_with_prompt(confirm: bool) -> Result<CachedPassword> {
     Ok(scan)
 }
 
-
 /// Prompts for a password, optionally asking for
 /// password confirmation.
-/// 
+///
 /// Getting the password with confirmation is commonly
 /// used when we are initializing a new vault.
 pub fn prompt_password(confirm: bool) -> Result<CachedPassword> {
@@ -501,19 +576,24 @@ pub fn prompt_password(confirm: bool) -> Result<CachedPassword> {
     }
 }
 
-
 pub fn fetch_password(wrapped: &WrappedKey) -> Result<CachedPassword> {
     match env::var("novpwd").map(CachedPassword::from_string) {
         Ok(mut e) => {
-            console_log!(Info, "Found a password in the shell variables, trying the password.");
+            console_log!(
+                Info,
+                "Found a password in the shell variables, trying the password."
+            );
             if wrapped.get_master_key(&mut e).is_ok() {
                 console_log!(Info, "Password succesfully verified.");
                 Ok(e)
             } else {
-                console_log!(Error, "The password could not be verified and thus will need to be entered manually.");
+                console_log!(
+                    Error,
+                    "The password could not be verified and thus will need to be entered manually."
+                );
                 prompt_password(false)
             }
         }
-        Err(_) => prompt_password(false) 
+        Err(_) => prompt_password(false),
     }
 }
