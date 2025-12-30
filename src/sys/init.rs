@@ -59,6 +59,11 @@ fn create_metadata_directory(root: impl AsRef<Path>) -> Result<()> {
         std::fs::write(&ig_path, "# Feel free to customize.\n\n# Leave the next line be.\n/.nov\n")?;
     }
 
+    let toml = root.as_ref().join("novault.toml");
+    if !toml.exists() {
+        std::fs::write(&toml, "[settings]\ndefault_policy = \"IgnoreAndEncrypt\"\n\n[rules]\nunsecured = []\ndelete = []\n".as_bytes())?;
+    }
+
     // Perform the initial seal, we will use this to seed the git
     // repository.
     seal_postmigrate(root.as_ref(), &master)?;

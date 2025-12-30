@@ -5,6 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use serde::Deserialize;
+use walkdir::WalkDir;
 use std::{
     env,
     fs::{self, File},
@@ -58,6 +59,17 @@ pub fn make_git_repo(root: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+fn recreate_dir(path: &Path) -> Result<()> {
+    if !path.exists() {
+        // Create the folder.
+        std::fs::create_dir_all(path)?;
+    } else {
+        std::fs::remove_dir_all(path)?;
+        std::fs::create_dir_all(path)?;
+    }
+    Ok(())
+}
+
 /// This perfoms a seal without performing the directory migrations with the github.
 pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Result<()> {
     // Do a check to make sure the directory is wellformed.
@@ -67,25 +79,33 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
     }
 
     let unsecure_path = path.join(".nov").join("unsecure");
-    if !unsecure_path.exists() {
-        // Create the folder for unsecure files.
-        std::fs::create_dir_all(&unsecure_path)?;
-    } else {
-        std::fs::remove_dir_all(&unsecure_path)?;
-        std::fs::create_dir_all(&unsecure_path)?;
-    }
+    recreate_dir(&unsecure_path)?;
+
+    let secure_local_path = path.join(".nov").join("secure_local");
+    recreate_dir(&secure_local_path)?;
 
     // Parse in the filter.
     let filter = NovFilter::from_root(path)?;
 
     let zip_loc = path.join(".nov").join("inpro.bin");
-
     if zip_loc.exists() {
         std::fs::remove_file(&zip_loc)?;
         console_log!(Info, "Removed the in-progress ZIP file.");
     }
 
+    let secure_local_zip = path.join(".nov").join("secure_local").join("inpro.bin");
+    if secure_local_zip.exists() {
+        std::fs::remove_file(&secure_local_zip)?;
+        console_log!(Info, "Removed the in-progress ZIP file.");
+    }
+
+
+
+    let mut sec_local_writer = VaultWriter::new(&secure_local_zip, &master.key_bytes())?;
+
     let mut enc_writer = VaultWriter::new(&zip_loc, &master.key_bytes())?;
+
+
 
     let src_dir = path.canonicalize()?;
 
@@ -101,37 +121,37 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
         let path = file.path();
         let name = path.strip_prefix(&src_dir)?;
         // println!("Name: {name:?}\n\t{:?}", filter.check_decision(path)?);
-        if path.is_dir() && name.to_str().is_some_and(|f| f == ".nov") {
-            println!("FOUND");
-        } else {
-            // Schedule this path for unlinking.
-            to_unlink.push(file.clone());
-            match filter.check_decision(path)? {
-                FilterDecision::Delete => {
-                    if path.is_dir() {
-                        std::fs::remove_dir(path)?;
-                    } else {
-                        std::fs::remove_file(path)?;
-                    }
-                }
-                FilterDecision::Encrypt => {
-                    // We just write it to the normal zip.
-                    enc_writer.write_path(path, name)?;
-                    // write_path_to_zip(&mut enc_zip, enc_options, path, name)?;
-                }
-                FilterDecision::IgnoreAndEncrypt => {}
-                FilterDecision::Unsecure => {
-                    if path.is_dir() {
-                        std::fs::create_dir_all(unsecure_path.join(name))?;
-                    } else {
-                        std::fs::write(unsecure_path.join(name), std::fs::read(path)?)?;
-                    }
-                }
+        // if path.is_dir() && name.to_str().is_some_and(|f| f == ".nov") {
+        //     println!("FOUND");
+        // } else {
+        // Schedule this path for unlinking.
+        to_unlink.push(file.clone());
+        match filter.check_decision(path)? {
+            FilterDecision::Delete => {
+   
+                // We do not do anything and allow it to unlink.
             }
+            FilterDecision::Encrypt => {
+                // We just write it to the normal zip.
+                enc_writer.write_path(path, name)?;
+                // write_path_to_zip(&mut enc_zip, enc_options, path, name)?;
+            }
+            FilterDecision::IgnoreAndEncrypt => {
+                // println!("IGNORE AND ENCRYPT: {:?}", path);
+                sec_local_writer.write_path(path, name)?;
+            }
+            FilterDecision::Unsecure => {
+                if path.is_dir() {
+                    std::fs::create_dir_all(unsecure_path.join(name))?;
+                } else {
+                    std::fs::write(unsecure_path.join(name), std::fs::read(path)?)?;
+                }
+            } // }
         }
     }
 
     enc_writer.finish()?;
+    sec_local_writer.finish()?;
 
     // Now it is time to unlink all of the directories.
     to_unlink.sort_by_cached_key(|f| std::cmp::Reverse(f.depth()));
@@ -148,7 +168,7 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
 
     std::fs::write(
         path.join(".gitignore"),
-        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure",
+        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure\n/.nov/secure_local",
     )?;
     std::fs::write(
         path.join(".gitattributes"),
@@ -248,17 +268,26 @@ fn unseal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Res
     let path = root.as_ref();
     let vault_path = path.join("vault.bin");
 
+    let sec_local_path = path.join(".nov").join("secure_local").join("inpro.bin");
+
     let state_file = StateFile::new(path);
 
     let wrapped = state_file.get_mk()?;
 
     let master = wrapped.get_master_key_with_no_rewrap(password)?;
 
-    let mut header = std::fs::read(&vault_path)?;
 
-    let mut vault = header.split_off(32);
+  
 
-    decrypt(&mut header, &mut vault, master.key_bytes())?;
+    console_log!(Info, "Decrypting the vault itself...");
+    // Decrypt the vault itself.
+    let vault = decrypt_zip(&vault_path, &master)?;
+
+    console_log!(Info, "Decrypting the locally secured files...");
+    // Get the locally secured files.
+    let sec_local = decrypt_zip(&sec_local_path, &master)?;
+
+
 
     // If decryption passes we can start doing mutable ops.
     // Create the wrap directory.
@@ -274,6 +303,66 @@ fn unseal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Res
     std::fs::remove_file(path.join(".gitignore"))?;
     std::fs::remove_file(path.join(".gitattributes"))?;
 
+    // Expand the files into the main directory.
+    expand_decrypted_bin(path, vault)?;
+
+    // Expand the locally secured files.
+    expand_decrypted_bin(path, sec_local)?;
+
+    // Erase the vault binary.
+    std::fs::remove_file(path.join("vault.bin"))?;
+
+    // Remove the locally secured files.
+    std::fs::remove_dir_all(path.join(".nov").join("secure_local"))?;
+
+    // Relocate unsecure files.
+    relocate_unsecure_files(path)?;
+
+
+    state_file.set_state(NovState::Unsealed)?;
+
+
+    Ok(())
+}
+
+fn relocate_unsecure_files(root: impl AsRef<Path>) -> Result<()> {
+    let path = root.as_ref();
+
+
+    let unsecure_path = path.join(".nov").join("unsecure");
+
+
+    for dir in WalkDir::new(&unsecure_path) {
+        let dir = dir?;
+        if dir.depth() == 0 {
+            continue;
+        }
+        let lpath = dir.path();
+        let name = lpath.strip_prefix(&unsecure_path)?;
+
+        if !lpath.exists() {
+            // TODO: How do we want to handle this case?
+        } else {
+            std::fs::rename(lpath, path.join(name))?;
+        }
+    }
+
+    // Now we delete the directory.
+    std::fs::remove_dir_all(unsecure_path)?;
+
+    Ok(())
+}
+
+fn decrypt_zip(vault_path: &Path, master: &MasterVaultKey) -> Result<Vec<u8>> {
+     let mut header = std::fs::read(&vault_path)?;
+
+    let mut vault = header.split_off(32);
+
+    decrypt(&mut header, &mut vault, master.key_bytes())?;
+    Ok(vault)
+}
+
+fn expand_decrypted_bin(path: &Path, vault: Vec<u8>) -> Result<()> {
     let mut real = ZipArchive::new(Cursor::new(vault))?;
 
     for i in 0..real.len() {
@@ -297,13 +386,6 @@ fn unseal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Res
             std::io::copy(&mut entry, &mut outfile)?;
         }
     }
-
-    // Erase the vault binary.
-    std::fs::remove_file(path.join("vault.bin"))?;
-
-    state_file.set_state(NovState::Unsealed)?;
-    // write_meta_status(path, b"unsealed")?;
-
     Ok(())
 }
 
@@ -384,7 +466,10 @@ fn open_internal(root: impl AsRef<Path>, password: &mut CachedPassword) -> Resul
         match read()? {
             Event::Key(key) => {
                 if key.is_press() {
-                    if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                    if key.code == KeyCode::Char('q')
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
                         break;
                     }
                     if key.code == KeyCode::Char('s') {
@@ -420,13 +505,16 @@ where
     F: FnMut() -> Result<()>,
 {
     require_seal_with_retrieval(root, pf_functor, fetch_password, functor)
-
 }
-
 
 /// This is a guard that makes sure things happen in the correct order
 /// and is used for a few operations that require the seal-unseal pattern.
-fn require_seal_with_retrieval<PF, KR, F>(root: impl AsRef<Path>, mut pf_functor: PF, mut kr_functor: KR, mut functor: F) -> Result<()>
+fn require_seal_with_retrieval<PF, KR, F>(
+    root: impl AsRef<Path>,
+    mut pf_functor: PF,
+    mut kr_functor: KR,
+    mut functor: F,
+) -> Result<()>
 where
     PF: FnMut(&StateFile) -> Result<()>,
     KR: FnMut(&WrappedKey) -> Result<CachedPassword>,
