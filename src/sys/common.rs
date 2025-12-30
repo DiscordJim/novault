@@ -127,27 +127,27 @@ fn seal_with_pwd(root: impl AsRef<Path>, password: &mut CachedPassword) -> Resul
 pub fn unseal(root: impl AsRef<Path>) -> Result<()> {
     let path = root.as_ref();
 
-    // Check the status.
-    match get_repo_state(path)? {
-        NovState::Sealed => {}
-        x => {
-            return Err(anyhow!(
-                "We cannot unseal a vault that it not in the sealed state. The vault is currently in the {x:?} state."
-            ));
-        }
-    }
+    // // Check the status.
+    // match get_repo_state(path)? {
+    //     NovState::Sealed => {}
+    //     x => {
+    //         return Err(anyhow!(
+    //             "We cannot unseal a vault that it not in the sealed state. The vault is currently in the {x:?} state."
+    //         ));
+    //     }
+    // }
 
-    let vault_path = path.join("vault.bin");
+    // let vault_path = path.join("vault.bin");
 
-    if !vault_path.exists() {
-        return Err(anyhow!("No vault binary file."));
-    }
+    // if !vault_path.exists() {
+    //     return Err(anyhow!("No vault binary file."));
+    // }
 
-    if !exists_git_repo(path) {
-        return Err(anyhow!(
-            "Tried to re-seal, but there was no external git repo."
-        ));
-    }
+    // if !exists_git_repo(path) {
+    //     return Err(anyhow!(
+    //         "Tried to re-seal, but there was no external git repo."
+    //     ));
+    // }
 
     let mut password = prompt_password(false)?;
 

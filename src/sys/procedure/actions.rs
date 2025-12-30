@@ -5,16 +5,20 @@ use zip::ZipArchive;
 use std::ffi::OsStr;
 use std::{fs::File, io::{BufRead, BufReader, BufWriter, Cursor, Write}, path::{Path, PathBuf}, str::FromStr};
 
-use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, statefile::{StateFile, StateFileHandle}, writer::{VaultWriter, decrypt}}};
+use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL}, statefile::{StateFile, StateFileHandle}, writer::{VaultWriter, decrypt}}};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, strum::EnumString, PartialEq, Eq)]
 pub enum VaultState {
+
+    Uninit,
+
     /// This is what the initialization phase
     /// calls in order to supply a wrapped key.
     Seed,
     /// Init filesystem
     InitFileSystem,
     MakeExternalGitRepo,
+    MarkInitDone,
 
 
     // SEALING
@@ -38,27 +42,44 @@ pub enum VaultState {
     Unsealed
 }
 
+impl VaultState {
+    /// These states are ones with no inertia, in which the
+    /// system is a stable state.
+    /// 
+    /// If we ever start in a different state, then we need to
+    /// do repairs.
+    pub fn is_rest_state(&self) -> bool {
+        match self {
+            Self::Uninit | Self::Sealed | Self::Unsealed => true,
+            _ => false
+        }
+    }
+}
+
 pub struct Context<'a> {
     password: &'a mut CachedPassword,
     handle: StateFileHandle,
     master: Option<MasterVaultKey>,
     new_wrapped: Option<WrappedKey>,
     decrypted_zip_bytes: Option<Vec<u8>>,
-    decrypted_local_bytes: Option<Vec<u8>>
+    decrypted_local_bytes: Option<Vec<u8>>,
+    starting: bool,
+    fallthrough: bool
 }
 
 impl<'a> Context<'a> {
     pub fn new(root: &RootPath<Normal>, pass: &'a mut CachedPassword) -> Result<Self> {
         Ok(Self {
+            starting: true,
             password: pass,
             handle: StateFileHandle::new(root.path())?,
             master: None,
             new_wrapped: None,
             decrypted_zip_bytes: None,
-            decrypted_local_bytes: None
+            decrypted_local_bytes: None,
+            fallthrough: false
         })
     }
-    // fn wrapped_key(&self)
 }
 
 impl VaultState {
@@ -66,16 +87,141 @@ impl VaultState {
         self._act(root, master)
             .map_err(|e| anyhow!("({self:?}) {e:?}"))
     }
+    fn repair(&self, source: VaultState, root: &RootPath<Normal>, master: &mut Context) -> Result<()> {
+
+        match source {
+            Self::Uninit => { /* No repairs needed. */ },
+       
+            Self::Seed | Self::InitFileSystem => {
+                // TOOD: We should probably ask permission to do this?
+
+                if root.metadata_folder().exists() {
+                    std::fs::remove_dir_all(root.metadata_folder())?;
+                }
+                master.handle.set_state(Self::Uninit);
+            },
+
+            Self::MakeExternalGitRepo => {
+                make_external_git_repo(root)?;
+                if master.handle.get_init()? {
+                    mark_init_done(master)?;
+                }
+                master.handle.set_state(Self::Sealed);
+            }
+
+            Self::MarkInitDone => {
+                mark_init_done(master)?;
+                master.handle.set_state(Self::Sealed);
+            }
+
+
+            Self::RecreatingDirectories => {
+                recreate_directories(&root)?;
+                master.handle.set_state(Self::Unsealed);
+            }
+            
+
+            Self::Encrypting => revert_encryption_state(root, master)?,
+            
+            Self::DeleteSealedGitFiles => {
+                revert_encryption_state(root, master)?;
+                create_mandatory_post_seal_files(root)?;
+                master.handle.set_state(Self::Unsealed);
+            }
+            
+            Self::UnlinkPostSeal => {
+                master.starting = false;
+                SEAL_FULL.resume(Self::UnlinkPostSeal)
+                    .play(root, master)?;
+               
+            }
+            Self::RelocateEncryptedBinaries => {
+                master.starting = false;
+                SEAL_FULL.resume(Self::RelocateEncryptedBinaries)
+                    .play(root, master)?;
+            }
+            Self::WriteMandatoryPostSealFiles => {
+                master.starting = false;
+                SEAL_FULL.resume(Self::WriteMandatoryPostSealFiles)
+                    .play(root, master)?;
+            }
+            Self::RestoreVaultGit => {
+                master.starting = false;
+                SEAL_FULL.resume(Self::RestoreVaultGit)
+                    .play(root, master)?;
+            }
+            Self::Sealed => { /* Nothing to do */ }
+
+        
+
+
+            // UNSEALING
+            
+            Self::DecryptMainVault | Self::DecryptLocallySecuredVault => { 
+                master.handle.set_state(Self::Sealed);
+            },
+            Self::StashExternalGitRepo => {
+                restore_vault_git(&root)?;
+                master.handle.set_state(Self::Sealed);
+            }
+            Self::ExpandMainVault => {
+                // TODO: Cleanup files that were produced here.
+                master.handle.set_state(Self::Sealed);
+            }
+            Self::ExpandLocalVault => {
+                master.handle.set_state(Self::Sealed);
+            }
+            Self::CleanupOldBinaries => {
+                master.starting = false;
+                UNSEAL_FULL.resume(Self::CleanupOldBinaries)
+                    .play(root, master)?;
+            }
+            Self::RestoreUnsecureFiles => {
+                master.starting = false;
+                UNSEAL_FULL.resume(Self::RestoreUnsecureFiles)
+                    .play(root, master)?;
+            }
+            Self::Unsealed => { /* Nothing to do */}
+        }
+        Ok(())
+    }
     fn _act(&self, root: &RootPath<Normal>, master: &mut Context) ->  Result<()> {
-        console_log!(Info, "going to {self:?}");
+        if master.fallthrough {
+            return Ok(());
+        }
+        if master.starting {
+            let mut state = master.handle.get_state()?;
+            if !state.is_rest_state() {
+                console_log!(Warn, "We are not in a rest state, we were left in an incomplete state ({state:?}).");
+
+
+                // Perform reparations.
+                self.repair(state, root, master)?;
+                master.handle.writeback()?;
+                state = master.handle.get_state()?;
+            }
+            if state == VaultState::Unsealed && *self == Self::DecryptMainVault {
+                console_log!(Info, "The vault is already unsealed.");
+                master.fallthrough = true;
+                master.handle.writeback()?;
+                return Ok(());
+            }
+            master.starting = false;
+        }
+        
+
         master.handle.set_state(*self);
         master.handle.writeback()?;
         match self {
+            VaultState::Uninit => {}
             VaultState::Seed => {
-                seed_state(root, master)?;
+                seed_state(master)?;
             }
             VaultState::InitFileSystem => {
-                init_filesystem(root, master)?;
+                init_filesystem(root)?;
+            }
+            VaultState::MarkInitDone => {
+                mark_init_done(master)?;
             }
             VaultState::MakeExternalGitRepo => {
                 make_external_git_repo(root)?;
@@ -84,6 +230,7 @@ impl VaultState {
                 recreate_directories(root)?;
             }
             VaultState::Encrypting => {
+                // return Err(anyhow!("breh"));
                 write_encrypted_archives(root, master)?;
             }
 
@@ -108,10 +255,10 @@ impl VaultState {
                 decrypt_local_vault(root, master)?;
             }
             VaultState::StashExternalGitRepo => {
-                stash_external_git_repo(root, master)?;
+                stash_external_git_repo(root)?;
             }
             VaultState::DeleteSealedGitFiles => {
-                delete_sealed_git_files(root, master)?;
+                delete_sealed_git_files(root)?;
             },
             VaultState::ExpandMainVault => {
                 expand_decrypted_bin(root.path(), master.decrypted_zip_bytes.take().ok_or_else(|| anyhow!("Could not get bytes."))?)?;
@@ -120,7 +267,7 @@ impl VaultState {
                 expand_decrypted_bin(root.path(), master.decrypted_local_bytes.take().ok_or_else(|| anyhow!("Could not get bytes."))?)?;
             }
             VaultState::CleanupOldBinaries => {
-                cleanup_old_binaries(root, master)?;
+                cleanup_old_binaries(root)?;
             },
             VaultState::RestoreUnsecureFiles => {
                 relocate_unsecure_files(root)?;
@@ -134,6 +281,13 @@ impl VaultState {
     }
 }
 
+fn mark_init_done(ctx: &mut Context) -> Result<()> {
+
+
+    ctx.handle.set_init(false);
+
+    Ok(())
+}
 
 fn relocate_unsecure_files(root: &RootPath<Normal>) -> Result<()> {
     // let path = root.as_ref();
@@ -163,7 +317,7 @@ fn relocate_unsecure_files(root: &RootPath<Normal>) -> Result<()> {
 }
 
 
-fn cleanup_old_binaries(root: &RootPath<Normal>, master: &mut Context) -> Result<()> {
+fn cleanup_old_binaries(root: &RootPath<Normal>) -> Result<()> {
      // Remove the ignore and attributes files.
      std::fs::remove_file(root.vault_binary())?;
 
@@ -201,14 +355,14 @@ fn expand_decrypted_bin(path: &Path, vault: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn delete_sealed_git_files(root: &RootPath<Normal>, master: &mut Context) -> Result<()> {
+fn delete_sealed_git_files(root: &RootPath<Normal>) -> Result<()> {
      // Remove the ignore and attributes files.
     std::fs::remove_file(root.gitignore())?;
     std::fs::remove_file(root.gitattributes())?;
     Ok(())
 }
 
-fn stash_external_git_repo(root: &RootPath<Normal>, master: &mut Context) -> Result<()> {
+fn stash_external_git_repo(root: &RootPath<Normal>) -> Result<()> {
      // If decryption passes we can start doing mutable ops.
     // Create the wrap directory.
     if !root.wrap_folder().exists() {
@@ -269,7 +423,7 @@ fn make_external_git_repo(path: &RootPath<Normal>) -> Result<()> {
     Ok(())
 }
 
-fn init_filesystem(path: &RootPath<Normal>, ctx: &mut Context) -> Result<()> {
+fn init_filesystem(path: &RootPath<Normal>) -> Result<()> {
     let met_path = path.metadata_folder();
 
 
@@ -320,12 +474,13 @@ fn init_filesystem(path: &RootPath<Normal>, ctx: &mut Context) -> Result<()> {
     Ok(())
 }
 
-fn seed_state(path: &RootPath<Normal>, ctx: &mut Context) -> Result<()> {
+fn seed_state(ctx: &mut Context) -> Result<()> {
 
     let master = MasterVaultKey::generate();
     let wrapped =  WrappedKey::init(&UserVaultKey::init_fresh(ctx.password)?, &master)?;
 
     ctx.handle.set_master_key(&wrapped);
+    ctx.handle.set_init(true);
 
     Ok(())
 }
@@ -340,6 +495,42 @@ fn recreate_dir(path: &Path) -> Result<()> {
         std::fs::remove_dir_all(path)?;
         std::fs::create_dir_all(path)?;
     }
+    Ok(())
+}
+
+
+/// Performs the restoration if we were interrupted while encrypting.
+/// 
+/// In this case, we really have no choice but to delete all the directories,
+/// as it is not safe to proceed with sealing unless we have already written
+/// the new wrapped key.
+fn revert_encryption_state(
+    root: &RootPath<Normal>,
+    ctx: &mut Context
+) -> Result<()> {
+
+    if root.deletion_shards().exists() {
+        // If we have deletion shards, those will need to be cleaned up.
+        std::fs::remove_file(root.deletion_shards())?;
+    }
+
+    if root.secure_local_zip().exists() {
+        std::fs::remove_file(root.secure_local_zip())?;
+    }
+
+    if root.inprogress_vault().exists() {
+        std::fs::remove_file(root.inprogress_vault())?;
+    }
+
+    // Now we can move ourselves to the unsealed state.
+    // TODO: What about the case where encryption fails during init?
+    if ctx.handle.get_init()? {
+        ctx.handle.set_state(VaultState::RecreatingDirectories);
+    } else {
+        ctx.handle.set_state(VaultState::Unsealed);
+    }
+    
+
     Ok(())
 }
 

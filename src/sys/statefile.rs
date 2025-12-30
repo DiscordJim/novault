@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr};
 use anyhow::{Result, anyhow};
 use crate::sys::{common::NovState, mk::WrappedKey, procedure::actions::VaultState};
 
@@ -24,6 +24,13 @@ impl StateFileHandle {
     pub fn set_state(&mut self, state: VaultState) {
         self.state.insert("state".to_string(), format!("{state:?}"));
     }
+    pub fn set_init(&mut self, init: bool) {
+        self.state.insert("init".to_string(), format!("{init:?}"));
+
+    }
+    pub fn get_init(&self) -> Result<bool> {
+        Ok(self.state.get("init").map(|f| bool::from_str(f)).ok_or_else(|| anyhow!("Could not find 'init' in state file."))??)
+    }
     pub fn set_remote(&mut self, url: &str) {
         self.state.insert("remote".to_string(), url.to_string());
     }
@@ -32,6 +39,13 @@ impl StateFileHandle {
     }
     pub fn get_wrapped_key(&self) -> Result<WrappedKey> {
         WrappedKey::from_hex(self.state.get("wrapped").ok_or_else(|| anyhow!("Failed to lookup the wrapped key."))?)
+    }
+    pub fn get_state(&mut self) -> Result<VaultState> {
+        match self.state.get("state") {
+            Some(v) => Ok(VaultState::from_str(v)?),
+            None => Ok(VaultState::Uninit)
+        }
+        // Ok(VaultState::from_str(self.state.get("state").ok_or_else(|| anyhow!("Failed to get the state."))?)?)
     }
     pub fn writeback(&mut self) -> Result<()> {
         write_meta_status(&self.path, &self.state)?;

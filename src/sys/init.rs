@@ -1,9 +1,9 @@
-use std::{ffi::OsStr, path::Path};
+use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 
-use crate::{console_log, sys::{common::{NovState, exists_git_repo, exists_metadata_directory, make_git_repo, prompt_password}, lib::path::RootPath, mk::{MasterVaultKey, UserVaultKey, WrappedKey}, procedure::{actions::{Context, VaultState}, sequence::{INIT_FULL, Playable}}, statefile::StateFile}};
+use crate::{console_log, sys::{common::prompt_password, lib::path::RootPath, procedure::{actions::Context, sequence::{INIT_FULL, Playable}}}};
 
 
 

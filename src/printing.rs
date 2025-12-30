@@ -4,7 +4,8 @@ use colorize::AnsiColor;
 
 pub enum LogType {
     Info,
-    Error
+    Error,
+    Warn
 }
 
 #[macro_export]
@@ -18,6 +19,7 @@ macro_rules! console_log {
 pub fn _print_log(lt: LogType, ) {
     match lt {
         LogType::Info => print!("{} ", "INFO".green().bold()),
-        LogType::Error => print!("{} ", "ERROR".red().bold())
+        LogType::Error => print!("{} ", "ERROR".red().bold()),
+        LogType::Warn => print!("{} ", "WARN".yellow().bold())
     }
 }
