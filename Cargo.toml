@@ -1,6 +1,6 @@
 [package]
 name = "novovault"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "An encrypted store for notes"
 license = "MIT"

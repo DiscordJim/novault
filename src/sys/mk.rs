@@ -95,7 +95,7 @@ fn get_password(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
 }
 
 
-#[derive(ZeroizeOnDrop)]
+#[derive(ZeroizeOnDrop, Clone)]
 pub struct MasterVaultKey {
     key: [u8; 32]
 }
@@ -111,7 +111,7 @@ impl MasterVaultKey {
     }
 }
 
-#[derive(ZeroizeOnDrop)]
+#[derive(ZeroizeOnDrop, Clone)]
 pub struct WrappedKey {
     salt: [u8; 16],
     nonce: [u8; 24],

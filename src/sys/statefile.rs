@@ -1,7 +1,44 @@
 use std::{collections::HashMap, path::{Path, PathBuf}};
 use anyhow::{Result, anyhow};
-use crate::sys::{common::NovState, mk::WrappedKey};
+use crate::sys::{common::NovState, mk::WrappedKey, procedure::actions::VaultState};
 
+
+pub struct StateFileHandle {
+    path: PathBuf,
+    state: HashMap<String, String>
+}
+
+impl StateFileHandle {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+        let mut obj = Self {
+            path: path.as_ref().to_path_buf(),
+            state: HashMap::default()
+        };
+        obj._load()?;
+        Ok(obj)
+    }
+    fn _load(&mut self)  -> Result<()> {
+        self.state = read_hashmap(&self.path)?;
+        Ok(())
+    }
+    pub fn set_state(&mut self, state: VaultState) {
+        self.state.insert("state".to_string(), format!("{state:?}"));
+    }
+    pub fn set_remote(&mut self, url: &str) {
+        self.state.insert("remote".to_string(), url.to_string());
+    }
+    pub fn set_master_key(&mut self, key: &WrappedKey) {
+        self.state.insert("wrapped".to_string(), key.to_hex());
+    }
+    pub fn get_wrapped_key(&self) -> Result<WrappedKey> {
+        WrappedKey::from_hex(self.state.get("wrapped").ok_or_else(|| anyhow!("Failed to lookup the wrapped key."))?)
+    }
+    pub fn writeback(&mut self) -> Result<()> {
+        write_meta_status(&self.path, &self.state)?;
+
+        Ok(())
+    }
+}
 
 
 pub struct StateFile {
@@ -30,7 +67,7 @@ impl StateFile {
         read.insert("state".to_string(), text.to_string());
 
 
-        write_meta_status(&self.path, &read)?;
+        // write_meta_status(&self.path, &read)?;
 
 
         Ok(())
@@ -38,7 +75,7 @@ impl StateFile {
     pub fn set_remote(&self, url: &str) -> Result<()> {
         let mut read = read_hashmap(&self.path)?;
         read.insert("remote".to_string(), url.to_string());
-        write_meta_status(&self.path, &read)?;
+        // write_meta_status(&self.path, &read)?;
         Ok(())
     }
     pub fn get_remote(&self) -> Result<Option<String>> {
@@ -49,7 +86,7 @@ impl StateFile {
         let mut read = read_hashmap(&self.path)?;
 
         read.insert("wrapped".to_string(), salt.to_hex());
-        write_meta_status(&self.path, &read)?;
+        // write_meta_status(&self.path, &read)?;
         Ok(())
     }
     pub fn get_mk(&self) -> Result<WrappedKey> {

@@ -27,6 +27,7 @@ fn run_subcommand() -> Result<()> {
 }
 
 fn main() {
+    println!("Hello");
     match run_subcommand() {
         Ok(()) => {}
         Err(e) => {

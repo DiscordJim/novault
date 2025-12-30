@@ -1,15 +1,26 @@
-use std::{marker::PhantomData, path::{Path, PathBuf}};
+use std::{marker::PhantomData, path::PathBuf};
 use anyhow::Result;
 
+
 pub struct RootPath<D>(PathBuf, PhantomData<D>);
+
+impl<D> Clone for RootPath<D> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
 
 pub struct Normal;
 pub struct Canonical;
 
-impl<T> RootPath<T> {
+impl RootPath<Normal> {
     pub fn new(buf: PathBuf) -> RootPath<Normal> {
         RootPath(buf, PhantomData)
     }
+}
+
+impl<T> RootPath<T> {
+    
     pub fn canonicalize(&self) -> Result<RootPath<Canonical>> {
         Ok(RootPath(self.0.clone().canonicalize()?, PhantomData))
     }
@@ -34,6 +45,9 @@ impl<T> RootPath<T> {
     pub fn gitignore(&self) -> PathBuf {
         self.path().join(".gitignore")
     }
+    pub fn config(&self) -> PathBuf {
+        self.path().join("novault.toml")
+    }
     pub fn gitattributes(&self) -> PathBuf {
         self.path().join(".gitattributes")
     }
@@ -42,5 +56,14 @@ impl<T> RootPath<T> {
     }
     pub fn vault_binary(&self) -> PathBuf {
         self.path().join("vault.bin")
+    }
+    pub fn wrap_folder(&self) -> PathBuf {
+        self.metadata_folder().join("wrap")
+    }
+    pub fn external_git(&self) -> PathBuf {
+        self.wrap_folder().join("external.git")
+    }
+    pub fn local_git(&self) -> PathBuf {
+        self.path().join(".git")
     }
 }
