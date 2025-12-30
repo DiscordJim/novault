@@ -5,7 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use serde::Deserialize;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 use std::{
     env,
     fs::{self, File},
@@ -78,6 +78,46 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
         return Err(anyhow!("No metadata directory, cannot seal the target."));
     }
 
+    
+
+    let mut to_unlink = vec![];
+
+    write_sealed_archives(path, &mut to_unlink, master)?;
+
+    // Now it is time to unlink all of the directories.
+    to_unlink.sort_by_cached_key(|f| std::cmp::Reverse(f.depth()));
+
+    for path in to_unlink {
+        if path.path().is_file() {
+            std::fs::remove_file(path.path())?;
+        } else {
+            std::fs::remove_dir_all(path.path())?;
+        }
+    }
+
+    let zip_loc = path.join(".nov").join("inpro.bin");
+    std::fs::rename(&zip_loc, path.join("vault.bin"))?;
+
+    std::fs::write(
+        path.join(".gitignore"),
+        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure\n/.nov/secure_local",
+    )?;
+    std::fs::write(
+        path.join(".gitattributes"),
+        "# NOVAULT\n# DO NOT MODIFY THIS\nvault.bin binary",
+    )?;
+
+    Ok(())
+}
+
+
+fn write_sealed_archives(
+    root: impl AsRef<Path>,
+    to_unlink: &mut Vec<DirEntry>,
+    master: &MasterVaultKey
+) -> Result<()> {
+    let path = root.as_ref();
+
     let unsecure_path = path.join(".nov").join("unsecure");
     recreate_dir(&unsecure_path)?;
 
@@ -111,7 +151,6 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
 
     let walk = walkdir::WalkDir::new(&src_dir);
 
-    let mut to_unlink = vec![];
 
     for file in walk.into_iter().filter_entry(|e| e.file_name() != ".nov") {
         let file = file?;
@@ -120,10 +159,8 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
         }
         let path = file.path();
         let name = path.strip_prefix(&src_dir)?;
-        // println!("Name: {name:?}\n\t{:?}", filter.check_decision(path)?);
-        // if path.is_dir() && name.to_str().is_some_and(|f| f == ".nov") {
-        //     println!("FOUND");
-        // } else {
+
+    
         // Schedule this path for unlinking.
         to_unlink.push(file.clone());
         match filter.check_decision(path)? {
@@ -152,28 +189,6 @@ pub fn seal_postmigrate(root: impl AsRef<Path>, master: &MasterVaultKey) -> Resu
 
     enc_writer.finish()?;
     sec_local_writer.finish()?;
-
-    // Now it is time to unlink all of the directories.
-    to_unlink.sort_by_cached_key(|f| std::cmp::Reverse(f.depth()));
-
-    for path in to_unlink {
-        if path.path().is_file() {
-            std::fs::remove_file(path.path())?;
-        } else {
-            std::fs::remove_dir_all(path.path())?;
-        }
-    }
-
-    std::fs::rename(&zip_loc, path.join("vault.bin"))?;
-
-    std::fs::write(
-        path.join(".gitignore"),
-        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure\n/.nov/secure_local",
-    )?;
-    std::fs::write(
-        path.join(".gitattributes"),
-        "# NOVAULT\n# DO NOT MODIFY THIS\nvault.bin binary",
-    )?;
 
     Ok(())
 }
