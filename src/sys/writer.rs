@@ -62,7 +62,7 @@ impl VaultWriter {
         let mut inner = file.finish()?.into_inner();
 
         let key = Key::from_slice(&self.key);
-        let mut cipher = XChaCha20Poly1305::new(&key);
+        let mut cipher = XChaCha20Poly1305::new(key);
 
 
         let mut nbytes = [0u8; 24];
@@ -80,7 +80,7 @@ impl VaultWriter {
         let mut file = File::create(&self.path)?;
         file.write_all(b"NOVO")?;
         file.write_all(&[0u8, 0, 0, 0])?;
-        file.write_all(&nonce)?;
+        file.write_all(nonce)?;
         file.write_all(&inner)?;
 
         
@@ -94,7 +94,7 @@ impl VaultWriter {
 
 
 pub fn decrypt(
-    header: &mut Vec<u8>,
+    header: &mut [u8],
     vault: &mut Vec<u8>,
     key: &[u8; 32]  
 ) -> Result<()> {

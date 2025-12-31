@@ -5,7 +5,7 @@ use zip::ZipArchive;
 use std::ffi::OsStr;
 use std::{fs::File, io::{BufRead, BufReader, BufWriter, Cursor, Write}, path::{Path, PathBuf}, str::FromStr};
 
-use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL}, statefile::{StateFile, StateFileHandle}, writer::{VaultWriter, decrypt}}};
+use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL}, statefile::{StateFileHandle}, writer::{VaultWriter, decrypt}}};
 
 #[derive(Debug, Clone, Copy, strum::EnumString, PartialEq, Eq)]
 pub enum VaultState {
@@ -40,6 +40,8 @@ pub enum VaultState {
     CleanupOldBinaries,
     RestoreUnsecureFiles,
     Unsealed
+
+    // SET REMOTE
 }
 
 impl VaultState {
@@ -49,10 +51,7 @@ impl VaultState {
     /// If we ever start in a different state, then we need to
     /// do repairs.
     pub fn is_rest_state(&self) -> bool {
-        match self {
-            Self::Uninit | Self::Sealed | Self::Unsealed => true,
-            _ => false
-        }
+        matches!(self, Self::Uninit | Self::Sealed | Self::Unsealed)
     }
 }
 
@@ -116,7 +115,7 @@ impl VaultState {
 
 
             Self::RecreatingDirectories => {
-                recreate_directories(&root)?;
+                recreate_directories(root)?;
                 master.handle.set_state(Self::Unsealed);
             }
             
@@ -161,7 +160,7 @@ impl VaultState {
                 master.handle.set_state(Self::Sealed);
             },
             Self::StashExternalGitRepo => {
-                restore_vault_git(&root)?;
+                restore_vault_git(root)?;
                 master.handle.set_state(Self::Sealed);
             }
             Self::ExpandMainVault => {
@@ -204,6 +203,11 @@ impl VaultState {
                 console_log!(Info, "The vault is already unsealed.");
                 master.fallthrough = true;
                 master.handle.writeback()?;
+                return Ok(());
+            }
+            if state == Self::Sealed && *self == Self::RecreatingDirectories {
+                console_log!(Info, "The vault is already sealed.");
+                master.fallthrough = true;
                 return Ok(());
             }
             master.starting = false;
@@ -377,7 +381,7 @@ fn stash_external_git_repo(root: &RootPath<Normal>) -> Result<()> {
 }
 
 fn decrypt_zip(vault_path: &Path, master: &MasterVaultKey) -> Result<Vec<u8>> {
-     let mut header = std::fs::read(&vault_path)?;
+     let mut header = std::fs::read(vault_path)?;
 
     let mut vault = header.split_off(32);
 
@@ -456,7 +460,7 @@ fn init_filesystem(path: &RootPath<Normal>) -> Result<()> {
             use windows_sys::Win32::Foundation::GetLastError;
 
             let err = unsafe { GetLastError() };
-            return Err(std::io::Error::from_raw_os_error(err as i32))?;
+            Err(std::io::Error::from_raw_os_error(err as i32))?;
         }
     }
 
@@ -539,13 +543,13 @@ fn write_encrypted_archives(
     ctx: &mut Context
 ) -> Result<()> {
 
-    let (new_wrap, master) = StateFile::new(root.path()).get_mk()?.get_master_key(ctx.password)?;
+    let (new_wrap, master) = ctx.handle.get_wrapped_key()?.get_master_key(ctx.password)?;
 
     ctx.new_wrapped = Some(new_wrap.clone());
 
      let mut sec_local_writer = VaultWriter::new(root.secure_local_zip(), master.key_bytes())?;
 
-    let mut enc_writer = VaultWriter::new(root.inprogress_vault(), &master.key_bytes())?;
+    let mut enc_writer = VaultWriter::new(root.inprogress_vault(), master.key_bytes())?;
 
     let filter = NovFilter::from_root(root.path())?;
 
@@ -604,7 +608,7 @@ fn write_encrypted_archives(
     for link in to_unlink {
         // Write the path.
         buf.write_all(link.path().to_string_lossy().as_bytes())?;
-        buf.write_all(&[b'\n'])?;
+        buf.write_all(b"\n")?;
     }
 
     // Flush the buffer to the disk.
@@ -634,7 +638,7 @@ fn unlink_other_archives(root: &RootPath<Normal>) -> Result<()> {
 
     for line in bufr.lines() {
         let line = line?;
-        if line.len() == 0 {
+        if line.is_empty() {
             continue; // We do not want to interact with empty lines.
         }
         let path = PathBuf::from_str(&line)?;
@@ -658,7 +662,7 @@ fn unlink_other_archives(root: &RootPath<Normal>) -> Result<()> {
 }
 
 fn relocate_encrypted_binaries(root: &RootPath<Normal>) -> Result<()> {
-    std::fs::rename(&root.inprogress_vault(), &root.vault_binary())?;
+    std::fs::rename(root.inprogress_vault(), root.vault_binary())?;
     Ok(())
 }
 

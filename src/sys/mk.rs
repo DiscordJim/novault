@@ -38,7 +38,7 @@ impl CachedPassword {
                     }
                 } else {
                     // println!("RESEEDING {}", self.tag);
-                    let new_pass = get_password(&self.password, &*test_salt)?;
+                    let new_pass = get_password(&self.password, test_salt)?;
                     *salt = *test_salt;
                     *password = new_pass;
                     self.get_password(test_salt)?
@@ -46,7 +46,7 @@ impl CachedPassword {
             }
             None => {
                 // println!("RESEEDING (2) {}", self.tag);
-                let new_pass = get_password(&self.password, &*test_salt)?;
+                let new_pass = get_password(&self.password, test_salt)?;
                 self.cache = Some(CachedPasswordInner {
                     password: new_pass,
                     salt: *test_salt
@@ -71,7 +71,7 @@ pub struct UserVaultKey {
 
 impl UserVaultKey {
     pub fn init_with_salt(password: &mut CachedPassword, salt: &[u8; 16]) -> Result<Self> {
-        Ok(password.get_password(salt)?)
+        password.get_password(salt)
     }
     pub fn init_fresh(password: &mut CachedPassword) -> Result<Self> {
         let mut salt = [0u8; 16];
@@ -129,7 +129,7 @@ impl WrappedKey {
         // let key_phrase = get_password(passphrase, &self.salt)?;
         
         let key = Key::from_slice(&*key_phrase);
-        let cipher = XChaCha20Poly1305::new(&key);
+        let cipher = XChaCha20Poly1305::new(key);
 
 
 
@@ -181,7 +181,7 @@ impl WrappedKey {
         
         buffer.extend_from_slice(&self.salt);
         buffer.extend_from_slice(&self.payload);
-        return buffer.encode_hex();
+        buffer.encode_hex()
     }
 }
 
@@ -192,7 +192,7 @@ fn generate_wrapped_mk(
 ) -> Result<WrappedKey> {
 
     let key = Key::from_slice(&rkey.key);
-    let cipher = XChaCha20Poly1305::new(&key);
+    let cipher = XChaCha20Poly1305::new(key);
 
 
     let mut nbytes = [0u8; 24];

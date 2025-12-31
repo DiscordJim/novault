@@ -79,7 +79,7 @@ fn read_rules(path: impl AsRef<Path>) -> Result<TomlRules> {
     if let Some(unsec) = cfg.rules.get("unsecured") {
         let mut gibuilder = GitignoreBuilder::new("");
         for unsecured in unsec {
-            gibuilder.add_line(None, &unsecured)?;
+            gibuilder.add_line(None, unsecured)?;
         }
         unsecured = Some(gibuilder.build()?);
     }
@@ -87,7 +87,7 @@ fn read_rules(path: impl AsRef<Path>) -> Result<TomlRules> {
     if let Some(unsec) = cfg.rules.get("delete") {
         let mut gibuilder = GitignoreBuilder::new("");
         for unsecured in unsec {
-            gibuilder.add_line(None, &unsecured)?;
+            gibuilder.add_line(None, unsecured)?;
         }
         delete = Some(gibuilder.build()?);
     }
@@ -116,17 +116,15 @@ impl NovFilter {
     pub fn check_decision(&self, path: impl AsRef<Path>) -> Result<FilterDecision> {
         let rel = path.as_ref().strip_prefix(&self.root)?;
 
-        if let Some(delete) = &self.rules.delete {
-            if delete.matched(rel, rel.is_dir()).is_ignore() {
+        if let Some(delete) = &self.rules.delete && delete.matched(rel, rel.is_dir()).is_ignore() {
                 return Ok(FilterDecision::Delete);
-            }
+            
         }
 
-        if let Some(delete) = &self.rules.unsecured {
-            if delete.matched(rel, rel.is_dir()).is_ignore() {
+        if let Some(delete) = &self.rules.unsecured && delete.matched(rel, rel.is_dir()).is_ignore() {
                 return Ok(FilterDecision::Unsecure);
             }
-        }
+        
 
 
         if self.git_ignore.matched(rel, rel.is_dir()).is_ignore() {

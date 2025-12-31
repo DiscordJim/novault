@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, path::PathBuf};
+use std::{marker::PhantomData, path::{Path, PathBuf}};
 use anyhow::Result;
 
 
@@ -14,8 +14,8 @@ pub struct Normal;
 pub struct Canonical;
 
 impl RootPath<Normal> {
-    pub fn new(buf: PathBuf) -> RootPath<Normal> {
-        RootPath(buf, PhantomData)
+    pub fn new(buf: impl AsRef<Path>) -> RootPath<Normal> {
+        RootPath(buf.as_ref().to_path_buf(), PhantomData)
     }
 }
 
