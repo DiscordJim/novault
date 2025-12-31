@@ -1,11 +1,19 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr};
 use anyhow::{Result, anyhow};
+use strum::EnumString;
 use crate::sys::{mk::WrappedKey, procedure::actions::VaultState};
 
 
 pub struct StateFileHandle {
     path: PathBuf,
     state: HashMap<String, String>
+}
+
+#[derive(EnumString, strum::AsRefStr, PartialEq, Eq)]
+pub enum SyncMethod {
+    Git,
+    TigrisS3
+
 }
 
 impl StateFileHandle {
@@ -21,6 +29,9 @@ impl StateFileHandle {
         self.state = read_hashmap(&self.path)?;
         Ok(())
     }
+    pub fn reload(&mut self) -> Result<()> {
+        self._load()
+    }
     pub fn set_state(&mut self, state: VaultState) {
         self.state.insert("state".to_string(), format!("{state:?}"));
     }
@@ -33,6 +44,22 @@ impl StateFileHandle {
     }
     pub fn set_remote(&mut self, url: &str) {
         self.state.insert("remote".to_string(), url.to_string());
+    }
+    pub fn set_remote_storage(&mut self, method: SyncMethod) {
+        self.state.insert("remote_backend".to_string(), method.as_ref().to_string());
+    }
+    pub fn previous_tigris_commit_stamp(&mut self, stamp: &str) {
+        // println!("Stamp: {stamp}");
+        self.state.insert("prev_stamp_t3".to_string(), stamp.to_string());
+    }
+    pub fn get_previous_tigris_commit_stamp(&self) -> Result<String> {
+        self.state.get("prev_stamp_t3").ok_or_else(|| anyhow!("Failed to get the Tigris commit stamp.")).cloned()
+    }
+    pub fn get_remote_storage(&self) -> Result<Option<SyncMethod>> {
+        match self.state.get("remote_backend") {
+            Some(v) => Ok(Some(SyncMethod::from_str(v)?)),
+            None => Ok(None)
+        }
     }
     pub fn get_remote(&self) -> Option<String> {
         self.state.get("remote").map(|f| f.to_string())
@@ -60,7 +87,7 @@ impl StateFileHandle {
 
 
 
-fn read_hashmap(root: impl AsRef<Path>) -> Result<HashMap<String, String>> {
+pub fn read_hashmap(root: impl AsRef<Path>) -> Result<HashMap<String, String>> {
     let path = root.as_ref().join(".nov").join(".state");
 
     if !path.exists() {

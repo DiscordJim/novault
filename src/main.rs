@@ -1,3 +1,4 @@
+
 use clap::Parser;
 
 use crate::{
@@ -13,6 +14,7 @@ mod cli;
 mod printing;
 mod sys;
 
+
 fn run_subcommand() -> Result<()> {
     let args = Args::parse();
     match args {
@@ -27,7 +29,6 @@ fn run_subcommand() -> Result<()> {
 }
 
 fn main() {
-    // print!("{}", std::env::var("TARGET").unwrap());
     match run_subcommand() {
         Ok(()) => {}
         Err(e) => {

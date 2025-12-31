@@ -66,4 +66,10 @@ impl<T> RootPath<T> {
     pub fn local_git(&self) -> PathBuf {
         self.path().join(".git")
     }
+    pub fn state_file(&self) -> PathBuf {
+        self.metadata_folder().join(".state")
+    }
+    pub fn s3_param_file(&self) -> PathBuf {
+        self.metadata_folder().join(".s3auth")
+    }
 }

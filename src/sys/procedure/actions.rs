@@ -5,7 +5,7 @@ use zip::ZipArchive;
 use std::ffi::OsStr;
 use std::{fs::File, io::{BufRead, BufReader, BufWriter, Cursor, Write}, path::{Path, PathBuf}, str::FromStr};
 
-use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL}, statefile::{StateFileHandle}, writer::{VaultWriter, decrypt}}};
+use crate::{console_log, sys::{common::{exists_git_repo, make_git_repo}, filter::{FilterDecision, NovFilter}, lib::path::{Normal, RootPath}, mk::{CachedPassword, MasterVaultKey, UserVaultKey, WrappedKey}, procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL}, statefile::{StateFileHandle, SyncMethod}, writer::{VaultWriter, decrypt}}};
 
 #[derive(Debug, Clone, Copy, strum::EnumString, PartialEq, Eq)]
 pub enum VaultState {
@@ -63,12 +63,19 @@ pub struct Context<'a> {
     decrypted_zip_bytes: Option<Vec<u8>>,
     decrypted_local_bytes: Option<Vec<u8>>,
     starting: bool,
+    skip_local_zip: bool,
     fallthrough: bool
 }
 
 impl<'a> Context<'a> {
     pub fn password(&mut self) -> &mut CachedPassword {
         self.password
+    }
+    pub fn state_file(&self) -> &StateFileHandle {
+        &self.handle
+    }
+    pub fn state_file_mut(&mut self) -> &mut StateFileHandle {
+        &mut self.handle
     }
     pub fn new(root: &RootPath<Normal>, pass: &'a mut CachedPassword) -> Result<Self> {
         Ok(Self {
@@ -79,7 +86,8 @@ impl<'a> Context<'a> {
             new_wrapped: None,
             decrypted_zip_bytes: None,
             decrypted_local_bytes: None,
-            fallthrough: false
+            fallthrough: false,
+            skip_local_zip: false
         })
     }
 }
@@ -163,7 +171,7 @@ impl VaultState {
                 master.handle.set_state(Self::Sealed);
             },
             Self::StashExternalGitRepo => {
-                restore_vault_git(root)?;
+                restore_vault_git(root, master)?;
                 master.handle.set_state(Self::Sealed);
             }
             Self::ExpandMainVault => {
@@ -251,7 +259,7 @@ impl VaultState {
                 create_mandatory_post_seal_files(root)?;
             }
             VaultState::RestoreVaultGit => {
-                restore_vault_git(root)?;
+                restore_vault_git(root, master)?;
             },
             VaultState::Sealed => {},
             
@@ -262,16 +270,19 @@ impl VaultState {
                 decrypt_local_vault(root, master)?;
             }
             VaultState::StashExternalGitRepo => {
-                stash_external_git_repo(root)?;
+                stash_external_git_repo(root, master)?;
             }
             VaultState::DeleteSealedGitFiles => {
-                delete_sealed_git_files(root)?;
+                delete_sealed_git_files(root, master)?;
             },
             VaultState::ExpandMainVault => {
                 expand_decrypted_bin(root.path(), master.decrypted_zip_bytes.take().ok_or_else(|| anyhow!("Could not get bytes."))?)?;
             }
             VaultState::ExpandLocalVault => {
-                expand_decrypted_bin(root.path(), master.decrypted_local_bytes.take().ok_or_else(|| anyhow!("Could not get bytes."))?)?;
+                if !master.skip_local_zip {
+                    expand_decrypted_bin(root.path(), master.decrypted_local_bytes.take().ok_or_else(|| anyhow!("Could not get bytes."))?)?;
+                }
+                
             }
             VaultState::CleanupOldBinaries => {
                 cleanup_old_binaries(root)?;
@@ -299,6 +310,10 @@ fn mark_init_done(ctx: &mut Context) -> Result<()> {
 fn relocate_unsecure_files(root: &RootPath<Normal>) -> Result<()> {
     // let path = root.as_ref();
 
+    if !root.unsecure_folder().exists() {
+        // Sometimes there is nothing to move.
+        return Ok(());
+    }
 
     let unsecure_path = root.unsecure_folder();
 
@@ -329,7 +344,10 @@ fn cleanup_old_binaries(root: &RootPath<Normal>) -> Result<()> {
      std::fs::remove_file(root.vault_binary())?;
 
     // Remove the locally secured files.
-    std::fs::remove_dir_all(root.secure_local_folder())?;
+    if root.secure_local_folder().exists() {
+        std::fs::remove_dir_all(root.secure_local_folder())?;
+    }
+    
 
     Ok(())
 }
@@ -362,15 +380,22 @@ fn expand_decrypted_bin(path: &Path, vault: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn delete_sealed_git_files(root: &RootPath<Normal>) -> Result<()> {
+fn delete_sealed_git_files(root: &RootPath<Normal>, ctx: &mut Context) -> Result<()> {
+    if ctx.handle.get_remote_storage()? == Some(SyncMethod::TigrisS3) {
+        return Ok(());
+    }
      // Remove the ignore and attributes files.
     std::fs::remove_file(root.gitignore())?;
     std::fs::remove_file(root.gitattributes())?;
     Ok(())
 }
 
-fn stash_external_git_repo(root: &RootPath<Normal>) -> Result<()> {
-     // If decryption passes we can start doing mutable ops.
+fn stash_external_git_repo(root: &RootPath<Normal>, context: &mut Context) -> Result<()> {
+    if context.handle.get_remote_storage()? == Some(SyncMethod::TigrisS3) {
+        return Ok(());
+    }
+    
+    // If decryption passes we can start doing mutable ops.
     // Create the wrap directory.
     if !root.wrap_folder().exists() {
         std::fs::create_dir_all(root.wrap_folder())?;
@@ -411,7 +436,13 @@ fn decrypt_local_vault(root: &RootPath<Normal>, master: &mut Context) -> Result<
     match master.master.clone() {
         Some(k) => {
 
-            master.decrypted_local_bytes = Some(decrypt_zip(&root.secure_local_zip(), &k)?);
+
+            if !root.secure_local_zip().exists() {
+                master.skip_local_zip = true;
+            } else {
+                master.decrypted_local_bytes = Some(decrypt_zip(&root.secure_local_zip(), &k)?);
+            }
+            
 
             Ok(())
         }
@@ -690,7 +721,7 @@ fn recreate_directories(root: &RootPath<Normal>) -> Result<()> {
 fn create_mandatory_post_seal_files(root: &RootPath<Normal>) -> Result<()> {
     std::fs::write(
         root.gitignore(),
-        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure\n/.nov/secure_local",
+        "# NOVAULT\n# DO NOT MODIFY THIS\n/.nov/unsecure\n/.nov/secure_local\n/.nov/.s3auth\n",
     )?;
     std::fs::write(
         root.gitattributes(),
@@ -699,7 +730,10 @@ fn create_mandatory_post_seal_files(root: &RootPath<Normal>) -> Result<()> {
     Ok(())
 }
 
-fn restore_vault_git(root: &RootPath<Normal>) -> Result<()> {
+fn restore_vault_git(root: &RootPath<Normal>, ctx: &mut Context) -> Result<()> {
+    if ctx.handle.get_remote_storage()? == Some(SyncMethod::TigrisS3) {
+        return Ok(());
+    }
     // Now we need to move the .git back out to the top.
     std::fs::rename(
         root.external_git(),

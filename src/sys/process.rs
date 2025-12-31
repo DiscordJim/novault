@@ -1,7 +1,7 @@
 use std::{path::Path, process::Command};
 use anyhow::{Result, anyhow};
 
-use crate::sys::{lib::path::RootPath, procedure::actions::VaultState, statefile::StateFileHandle};
+use crate::sys::{procedure::actions::VaultState, statefile::StateFileHandle};
 
 
 

@@ -13,13 +13,12 @@ use std::{
 use crate::{
     console_log,
     sys::{
-        lib::path::{Normal, RootPath},
+        lib::{path::{Normal, RootPath}, sync::{init_remote, pull_remote, push_remote}},
         mk::{CachedPassword, WrappedKey},
         procedure::{
             actions::{Context, VaultState},
             sequence::{Playable, SEAL_FULL, UNSEAL_FULL},
         },
-        process::{add_remote_origin, git_add_commit_push, git_branch_main, git_clone},
         statefile::StateFileHandle,
     },
 };
@@ -90,8 +89,7 @@ pub fn sync(root: impl AsRef<Path>) -> Result<()> {
             None => Err(anyhow!("The remote URL is not set. Please run link first.")),
         },
         || {
-            console_log!(Info, "Performing synchronization...");
-            git_add_commit_push(root.as_ref())?;
+            push_remote(root.as_ref())?;
             Ok(())
         },
     )?;
@@ -173,8 +171,7 @@ fn open_internal(root: &RootPath<Normal>, password: &mut Context) -> Result<()> 
                         },
                         |_| Ok(password.password().clone()),
                         || {
-                            console_log!(Info, "Performing synchronization...");
-                            git_add_commit_push(root.path())?;
+                            push_remote(root.path())?;
                             Ok(())
                         },
                     )?;
@@ -218,44 +215,38 @@ where
 {
     // let wrapped = state_file.get_mk()?;
 
-    let mut state_file_handle = StateFileHandle::new(root.path())?;
+    let state_file_handle = StateFileHandle::new(root.path())?;
     let wrapped = state_file_handle.get_wrapped_key()?;
 
     let mut password = kr_functor(&wrapped)?;
+    drop(state_file_handle);
 
     let mut context = Context::new(root, &mut password)?;
 
-    pf_functor(&state_file_handle)?;
-    state_file_handle.writeback()?;
+    pf_functor(&context.state_file())?;
+    context.state_file_mut().reload()?;
 
-    if state_file_handle.get_state()? == VaultState::Unsealed {
+    if context.state_file_mut().get_state()? == VaultState::Unsealed {
         SEAL_FULL.play(root, &mut context)?;
 
+        // state_file_handle.reload()?;
         let e = functor();
+        // state_file_handle.reload()?;
+        context.state_file_mut().reload()?;
 
         UNSEAL_FULL.play(root, &mut context)?;
-
-        state_file_handle.writeback()?;
+        // state_file_handle.reload()?;
 
         e?
     } else {
         // We can run the functor immediately.
         functor()?;
+        context.state_file_mut().reload()?;
     }
 
     Ok(())
 }
 
-fn parse_link(url: &str) -> Result<String> {
-    // Form 1: git@github.com:JohnSmith/vault.git
-    if url.starts_with("git@") {
-        Ok(url.to_string())
-    } else {
-        Err(anyhow!(
-            "We only support SSH style URLs at this time: git@github:JohnSmith/vault.git"
-        ))
-    }
-}
 
 pub fn link(root: impl AsRef<Path>, url: &str) -> Result<()> {
     let path = root.as_ref();
@@ -266,22 +257,7 @@ pub fn link(root: impl AsRef<Path>, url: &str) -> Result<()> {
         &RootPath::new(path),
         |_| Ok(()),
         || {
-            let url = parse_link(url)?;
-
-            console_log!(Info, "Adding {url} as a remote origin...");
-            add_remote_origin(path, &url)?;
-
-            console_log!(Info, "Switching branch to main...");
-            git_branch_main(path)?;
-
-            console_log!(Info, "Pushing initial commit to main...");
-            git_add_commit_push(path)?;
-
-            let mut handle = StateFileHandle::new(root.as_ref())?;
-            handle.set_remote(&url);
-            handle.writeback()?;
-
-            console_log!(Info, "Succesfully linked to branch to remote!");
+           init_remote(path, url)?;
 
             Ok(())
         },
@@ -291,7 +267,7 @@ pub fn link(root: impl AsRef<Path>, url: &str) -> Result<()> {
 }
 
 pub fn pull(root: impl AsRef<Path>, url: &str) -> Result<()> {
-    let url = parse_link(url)?;
+    // let url = parse_link(url)?;
 
     if RootPath::new(root.as_ref()).metadata_folder().exists() {
         return Err(anyhow!(
@@ -305,9 +281,24 @@ pub fn pull(root: impl AsRef<Path>, url: &str) -> Result<()> {
     //     ));
     // }
 
-    git_clone(root.as_ref(), &url)?;
+    pull_remote(root.as_ref(), &url)?;
+    // git_clone(root.as_ref(), &url)?;
 
     Ok(())
+}
+
+pub fn prompt_s3_access_key_and_pass() -> Result<(String, String)> {
+    print!("{} ", "PROMPT".magenta().bold());
+    stdout().flush()?;
+
+    let access_key = rpassword::prompt_password("S3 Access Key: ")?;
+    
+    print!("{} ", "PROMPT".magenta().bold());
+    stdout().flush()?;
+    let secret_key = rpassword::prompt_password("S3 Secret Key: ")?;
+
+    Ok((access_key, secret_key))
+
 }
 
 fn get_password_with_prompt(confirm: bool) -> Result<CachedPassword> {
