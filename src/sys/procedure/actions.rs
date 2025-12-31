@@ -67,6 +67,9 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
+    pub fn password(&mut self) -> &mut CachedPassword {
+        self.password
+    }
     pub fn new(root: &RootPath<Normal>, pass: &'a mut CachedPassword) -> Result<Self> {
         Ok(Self {
             starting: true,

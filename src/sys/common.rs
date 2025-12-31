@@ -119,20 +119,30 @@ pub fn open(root: impl AsRef<Path>) -> Result<()> {
     let wrapped = StateFileHandle::new(root.as_ref())?.get_wrapped_key()?;
     let mut password = fetch_password(&wrapped)?;
 
+    
+    let mut context = Context::new(&RootPath::new(root.as_ref()), &mut password)?;
+
+    UNSEAL_FULL.play(
+        &RootPath::new(root.as_ref()),
+        &mut context
+    )?;
+
+    
+
     // Opens the internals.
-    let e = open_internal(&RootPath::new(root.as_ref()), &mut password);
+    let e = open_internal(&RootPath::new(root.as_ref()), &mut context);
 
     if StateFileHandle::new(root.as_ref())?.get_state()? == VaultState::Unsealed {
         SEAL_FULL.play(
             &RootPath::new(root.as_ref()),
-            &mut Context::new(&RootPath::new(root.as_ref()), &mut password)?,
+            &mut context
         )?;
     }
 
     e
 }
 
-fn open_internal(root: &RootPath<Normal>, password: &mut CachedPassword) -> Result<()> {
+fn open_internal(root: &RootPath<Normal>, password: &mut Context) -> Result<()> {
     console_log!(Info, "The repository is open for editing.");
     console_log!(
         Info,
@@ -161,7 +171,7 @@ fn open_internal(root: &RootPath<Normal>, password: &mut CachedPassword) -> Resu
                                 Err(anyhow!("The remote URL is not set. Please run link first."))
                             }
                         },
-                        |_| Ok(password.clone()),
+                        |_| Ok(password.password().clone()),
                         || {
                             console_log!(Info, "Performing synchronization...");
                             git_add_commit_push(root.path())?;

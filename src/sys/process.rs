@@ -1,6 +1,8 @@
 use std::{path::Path, process::Command};
 use anyhow::{Result, anyhow};
 
+use crate::sys::{lib::path::RootPath, procedure::actions::VaultState, statefile::StateFileHandle};
+
 
 
 pub fn add_remote_origin(root: &Path, url: &str) -> Result<()> {
@@ -37,6 +39,9 @@ pub fn git_branch_main(root: &Path) -> Result<()> {
 }
 
 pub fn git_add_all(root: &Path) -> Result<()> {
+    if StateFileHandle::new(root)?.get_state()? != VaultState::Sealed {
+        return Err(anyhow!("Detected the repository to be a non-sealed state. Refusing to push to remote."));
+    }
     let status = Command::new("git")
         .args(vec![
             "add".to_string(),
