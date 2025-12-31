@@ -27,6 +27,7 @@ fn run_subcommand() -> Result<()> {
 }
 
 fn main() {
+    // print!("{}", std::env::var("TARGET").unwrap());
     match run_subcommand() {
         Ok(()) => {}
         Err(e) => {

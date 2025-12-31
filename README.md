@@ -36,6 +36,11 @@ $ novovault open
 ```
 where it will keep the vault open while you work on it and shut it down when you close the application.
 
+To now link it to a remote repository, you can run link:
+```
+$ novovault link git@github.com:DiscordJim/novault.git
+```
+
 
 ### Acknowledgements
 I would like to thank Andrew Heschl for his contributions to this tool.
