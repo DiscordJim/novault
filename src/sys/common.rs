@@ -13,7 +13,7 @@ use std::{
 use crate::{
     console_log,
     sys::{
-        lib::{path::{Normal, RootPath}, sync::{init_remote, pull_remote, push_remote}},
+        lib::{path::{Normal, RootPath}, sync::{init_remote, load_tigris_params, pull_remote, push_remote}},
         mk::{CachedPassword, WrappedKey},
         procedure::{
             actions::{Context, VaultState},
@@ -82,6 +82,8 @@ pub fn unseal(root: impl AsRef<Path>) -> Result<()> {
 /// Performs a sync, which basically detects which mode
 /// we are currently in.
 pub fn sync(root: impl AsRef<Path>) -> Result<()> {
+
+
     require_seal(
         &RootPath::new(root.as_ref()),
         |sf| match sf.get_remote() {
@@ -215,16 +217,21 @@ where
 {
     // let wrapped = state_file.get_mk()?;
 
+    // println!("hello");
     let state_file_handle = StateFileHandle::new(root.path())?;
     let wrapped = state_file_handle.get_wrapped_key()?;
 
     let mut password = kr_functor(&wrapped)?;
     drop(state_file_handle);
 
+    // println!("hello 2");
+
     let mut context = Context::new(root, &mut password)?;
 
     pf_functor(&context.state_file())?;
     context.state_file_mut().reload()?;
+
+    // println!("hello 3");
 
     if context.state_file_mut().get_state()? == VaultState::Unsealed {
         SEAL_FULL.play(root, &mut context)?;
@@ -239,9 +246,12 @@ where
 
         e?
     } else {
+        // println!("hello 4");
         // We can run the functor immediately.
         functor()?;
+        // println!("hello 5");
         context.state_file_mut().reload()?;
+        // println!("hello 6");
     }
 
     Ok(())

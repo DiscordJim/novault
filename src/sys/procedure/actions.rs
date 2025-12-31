@@ -367,14 +367,25 @@ fn expand_decrypted_bin(path: &Path, vault: Vec<u8>) -> Result<()> {
         let out_path = path.join(rel_path);
 
         if entry.is_dir() {
-            std::fs::create_dir_all(&out_path)?;
+            std::fs::create_dir_all(&out_path)
+                .inspect_err(|e| {
+                    console_log!(Error, "Failed creating a directory (path={out_path:?}): {e:?}");
+                })?;
         } else {
             if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                std::fs::create_dir_all(parent).inspect_err(|e| {
+                    console_log!(Error, "Failed creating a parent directory (path={parent:?}): {e:?}");
+                })?;
             }
 
-            let mut outfile = File::create(&out_path)?;
-            std::io::copy(&mut entry, &mut outfile)?;
+            let mut outfile = File::create(&out_path)
+                .inspect_err(|e| {
+                    console_log!(Error, "Failed creating a file (path={out_path:?}): {e:?}");
+                })?;
+            std::io::copy(&mut entry, &mut outfile)
+                .inspect_err(|err| {
+                    console_log!(Error, "Failed copying from buffer to {outfile:?} with error: {err:?}");
+                })?;
         }
     }
     Ok(())

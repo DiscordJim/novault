@@ -9,7 +9,7 @@ use crate::{
         common::prompt_s3_access_key_and_pass, lib::{
             path::{Normal, RootPath},
             remote::t3::{get_snapshot_sig, t3_delete, t3_fetch, t3_put},
-        }, process::{add_remote_origin, git_add_commit_push, git_branch_main, git_clone}, statefile::{StateFileHandle, SyncMethod, read_hashmap}
+        }, process::{add_remote_origin, git_add_commit_push, git_branch_main, git_clone}, statefile::{StateFileHandle, SyncMethod, read_hashmap, string_to_hashmap}
     },
 };
 
@@ -155,7 +155,8 @@ pub fn transfer_file(
 }
 
 fn load_s3_params_direct(path: &RootPath<Normal>) -> Result<(String, String)> {
-    let load = read_hashmap(std::fs::read_to_string(path.s3_param_file())?)?;
+
+    let load = string_to_hashmap(&std::fs::read_to_string(path.s3_param_file())?);
 
     let access = load.get("ACCESS_KEY").ok_or_else(|| anyhow!("Failed to read the access key."))?;
     let secret = load.get("SECRET_KEY").ok_or_else(|| anyhow!("Failed to get the secret key."))?;
@@ -165,10 +166,14 @@ fn load_s3_params_direct(path: &RootPath<Normal>) -> Result<(String, String)> {
 
 pub fn load_tigris_params(path: &RootPath<Normal>) -> Result<(String, String)> {
     if path.s3_param_file().exists() {
-        if let Ok((acc, sec)) = load_s3_params_direct(path) {
+        console_log!(Info, "Found Tigris parameters, attempting to load them.");
+        if let Ok((acc, sec)) = load_s3_params_direct(path).inspect_err(|e| {
+            console_log!(Error, "Failed to read Tigris S3 parameters: {e:?}");
+        }) {
             return Ok((acc, sec));
         }
-        std::fs::remove_file(path.path())?;
+        console_log!(Warn, "There was an error reading the parameters, they will need to be recreated.");
+        std::fs::remove_file(path.s3_param_file())?;
     }
 
     let (acc, sec) = prompt_s3_access_key_and_pass()?;
@@ -263,6 +268,7 @@ pub fn pull_remote(path: &Path, url: &str) -> Result<()> {
 }
 
 pub fn push_remote(path: &Path) -> Result<()> {
+    // println!("Hello 4.1");
     let path = RootPath::new(path);
 
     let mut state = StateFileHandle::new(path.path())?;
@@ -270,6 +276,8 @@ pub fn push_remote(path: &Path) -> Result<()> {
     let Some(sync) = state.get_remote_storage()? else {
         return Err(anyhow!("We currently have no sync method configured."));
     };
+
+    // println!("hello 4.2");
 
     match sync {
         SyncMethod::Git => {
@@ -283,7 +291,11 @@ pub fn push_remote(path: &Path) -> Result<()> {
                 .ok_or_else(|| anyhow!("We have TigrisT3 but no remote set?"))?;
             let last_commit = state.get_previous_tigris_commit_stamp()?;
 
+
+            // println!("Hello 4.3");
             let (s3_access, s3_secret) = load_tigris_params(&path)?;
+
+            // println!("Hello 4.4");
 
             console_log!(Info, "Sending files to remote...");
             print!("  {} Sending state dictionary...", "(1/3)".yellow());

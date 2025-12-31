@@ -5,7 +5,7 @@ use crate::{
     cli::Args,
     sys::{
         common::{link, open, pull, seal_full, sync, unseal},
-        init::run_init,
+        init::run_init, lib::sync::load_tigris_params,
     },
 };
 use anyhow::Result;
@@ -29,6 +29,7 @@ fn run_subcommand() -> Result<()> {
 }
 
 fn main() {
+   
     match run_subcommand() {
         Ok(()) => {}
         Err(e) => {

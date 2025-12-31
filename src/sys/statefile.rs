@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr};
+use std::{collections::HashMap, hash::Hash, path::{Path, PathBuf}, str::FromStr};
 use anyhow::{Result, anyhow};
 use strum::EnumString;
 use crate::sys::{mk::WrappedKey, procedure::actions::VaultState};
@@ -115,6 +115,18 @@ pub fn read_hashmap(root: impl AsRef<Path>) -> Result<HashMap<String, String>> {
 
 
     Ok(file)
+}
+
+pub fn string_to_hashmap(src_str: &str) -> HashMap<String, String> {
+    src_str
+        .split("\n")
+        .map(|f| f.trim())
+        .filter(|f| !f.is_empty())
+        .map(|f| f.split("="))
+        .flat_map(|mut f| Some((f.next()?.to_string(), f.next()?.to_string())))
+        .collect()
+
+    
 }
 
 
