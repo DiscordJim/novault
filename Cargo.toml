@@ -4,6 +4,8 @@ version = "1.1.0"
 edition = "2024"
 description = "An encrypted store for notes"
 license = "MIT"
+repository = "https://github.com/DiscordJim/novault"
+homepage = "https://github.com/DiscordJim/novault"
 
 [dependencies]
 aes-gcm = { version = "0.10.3", features = ["stream"] }
