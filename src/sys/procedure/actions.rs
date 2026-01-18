@@ -412,15 +412,27 @@ fn stash_external_git_repo(root: &RootPath<Normal>, context: &mut Context) -> Re
         std::fs::create_dir_all(root.wrap_folder())?;
     }
 
-    // Move it into the wrap directory.
-    std::fs::rename(root.local_git(), root.external_git())?;
+
+    if !root.local_git().exists() {
+        // We should first check if we are already stashed for some reason.
+        if !root.external_git().exists() {
+            // We are not already stashed.
+            return Err(anyhow!("There is no local .git folder, so we checked the wrap folder and there was nothing stashed there either."));
+        }
+    } else {
+        // Move it into the wrap directory.
+        std::fs::rename(root.local_git(), root.external_git())?;
+    }
+
+    
 
 
     Ok(())
 }
 
 fn decrypt_zip(vault_path: &Path, master: &MasterVaultKey) -> Result<Vec<u8>> {
-     let mut header = std::fs::read(vault_path)?;
+     let mut header = std::fs::read(vault_path)
+     .map_err(|e| anyhow!("Failed to read zip error: {e:?}"))?;
 
     let mut vault = header.split_off(32);
 
@@ -451,7 +463,7 @@ fn decrypt_local_vault(root: &RootPath<Normal>, master: &mut Context) -> Result<
             if !root.secure_local_zip().exists() {
                 master.skip_local_zip = true;
             } else {
-                master.decrypted_local_bytes = Some(decrypt_zip(&root.secure_local_zip(), &k)?);
+                master.decrypted_local_bytes = Some(decrypt_zip(&root.secure_local_zip(), &k).map_err(|e| anyhow!("Failed to decrypt zip: {e:?}"))?);
             }
             
 
