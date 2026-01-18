@@ -1,8 +1,7 @@
 use anyhow::{Result, anyhow};
 use colorize::AnsiColor;
 use crossterm::{
-    event::{Event, KeyCode, KeyModifiers, read},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    ExecutableCommand, cursor::MoveUp, event::{Event, KeyCode, KeyModifiers, read}, terminal::{disable_raw_mode, enable_raw_mode}
 };
 use std::{
     env,
@@ -11,8 +10,7 @@ use std::{
 };
 
 use crate::{
-    console_log,
-    sys::{
+    console_log, printing::SteppedComputationHandle, sys::{
         lib::{path::{Normal, RootPath}, sync::{init_remote, load_tigris_params, pull_remote, push_remote}},
         mk::{CachedPassword, WrappedKey},
         procedure::{
@@ -20,7 +18,7 @@ use crate::{
             sequence::{Playable, SEAL_FULL, UNSEAL_FULL},
         },
         statefile::StateFileHandle,
-    },
+    }
 };
 
 /// Checks if a git repo exists at the target location.
@@ -71,6 +69,7 @@ pub fn unseal(root: impl AsRef<Path>) -> Result<()> {
     let root = RootPath::new(root.as_ref());
     let mut ctx = Context::new(&root, &mut password)?;
 
+    
     UNSEAL_FULL.play(&root, &mut ctx)?;
 
     // Now we perform an unseal with the password.
@@ -114,6 +113,17 @@ impl Drop for TermGuard {
     }
 }
 
+fn unseal_verbose(root: impl AsRef<Path>, context: &mut Context<'_>) -> Result<()> {
+    let mut stepped = SteppedComputationHandle::start("Unsealing", 1);
+    UNSEAL_FULL.play(
+        &RootPath::new(root.as_ref()),
+        context
+    )?;
+    stepped.start_next("Finalizing unseal", "Finalized", || {});
+    stepped.finish();
+    Ok(())
+}
+
 /// This is a way
 pub fn open(root: impl AsRef<Path>) -> Result<()> {
     let wrapped = StateFileHandle::new(root.as_ref())?.get_wrapped_key()?;
@@ -122,11 +132,9 @@ pub fn open(root: impl AsRef<Path>) -> Result<()> {
     
     let mut context = Context::new(&RootPath::new(root.as_ref()), &mut password)?;
 
-    UNSEAL_FULL.play(
-        &RootPath::new(root.as_ref()),
-        &mut context
-    )?;
-
+    // println!("A");
+    unseal_verbose(root.as_ref(), &mut context)?;
+    // println!("B");
     
 
     // Opens the internals.
@@ -241,7 +249,11 @@ where
         // state_file_handle.reload()?;
         context.state_file_mut().reload()?;
 
-        UNSEAL_FULL.play(root, &mut context)?;
+        // let mut stepped = SteppedComputationHandle::start("Unsealing", 1);
+        // UNSEAL_FULL.play(root, &mut context)?;
+        unseal_verbose(root.path(), &mut context)?;
+        // stepped.start_next("Finalizing unseal", "Finalized unseal", || { Ok(()) })?;
+        // stepped.finish();
         // state_file_handle.reload()?;
 
         e?
@@ -320,6 +332,8 @@ fn get_password_with_prompt(confirm: bool) -> Result<CachedPassword> {
     } else {
         "Confirm password: "
     })?);
+
+    stdout().lock().execute(MoveUp(1)).unwrap();
     Ok(scan)
 }
 

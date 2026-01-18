@@ -46,7 +46,8 @@ struct SteppedComputation {
     history: Vec<CompLine>,
     first: bool,
     new_lines: usize,
-    depth: usize
+    depth: usize,
+    finished: bool
 }
 
 // #[derive(Clone)]
@@ -62,7 +63,8 @@ pub enum SteppedComputationHandle {
         anchor: usize, 
         depth: usize,
         size: usize,
-        index: usize
+        index: usize,
+        finished: bool
     },
     Active(Arc<Mutex<SteppedComputation>>)
 }
@@ -95,7 +97,8 @@ impl SteppedComputationHandle {
                     anchor,
                     depth,
                     size,
-                    index: 0
+                    index: 0,
+                    finished: false
                 }
             }
             None => {
@@ -129,20 +132,20 @@ impl SteppedComputationHandle {
 
         // handle
     }
-    pub fn start_next<F>(&mut self, name: &str, done: &str, functor: F) -> Result<()>
+    pub fn start_next<F, O>(&mut self, name: &str, done: &str, functor: F) -> O
     where 
-        F: Fn() -> Result<()>
+        F: FnOnce() -> O
     {
         match self {
             Self::Active(real) => real.lock().unwrap().start_next(name, done, functor),
-            Self::Shell { previous, anchor, depth, size, index } => {
+            Self::Shell { previous, anchor, depth, size, index, finished } => {
                 let mut lock = previous.lock().unwrap();
                 *index += 1;
                 lock.add_feed_with_depth(name.to_string(), *index, *depth, *size);
-                functor()?;
+                let o = functor();
                 lock.finish_last_feed(done);
 
-                Ok(())
+                o
             }
         }
 
@@ -151,11 +154,20 @@ impl SteppedComputationHandle {
     }
     pub fn finish(&mut self) {
         match self {
-            Self::Active(inner) => inner.lock().unwrap().finish(),
-            Self::Shell { previous, anchor, depth, size, index } => {
+            Self::Active(inner) => {
+                let mut outer = CURRENT_COMP.lock().unwrap();
+                inner.lock().unwrap().finish();
+                *outer = None;
+
+            },
+            Self::Shell { previous, anchor, depth, size, index, finished } => {
+                if *finished {
+                    return;
+                }
                 let mut lock = previous.lock().unwrap();
                 lock.history = lock.history[..*anchor + 1].to_vec();
                 lock.depth -= 1;
+                *finished = true;
             }
         }
         // ;
@@ -178,7 +190,8 @@ impl SteppedComputation {
             history: vec![],
             first: true,
             new_lines: 0,
-            depth: 1
+            depth: 1,
+            finished: false
         };
         if print {
             s.render_printout();
@@ -189,14 +202,14 @@ impl SteppedComputation {
     }
 
     /// Starts the next step of the computation.
-    pub fn start_next<F>(&mut self, name: &str, done: &str, functor: F) -> Result<()>
+    pub fn start_next<F, O>(&mut self, name: &str, done: &str, functor: F) -> O
     where 
-        F: Fn() -> Result<()>
+        F: FnOnce() -> O
     {
         self.add_feed(name.to_string());
-        functor()?;
+        let o = functor();
         self.finish_last_feed(done);
-        Ok(())
+        o
     }
 
     fn add_feed(&mut self, feed: String) {
@@ -223,6 +236,10 @@ impl SteppedComputation {
     }
 
     pub fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
         let mut stout = stdout().lock();
         stout.execute(MoveUp(self.capped_history() as u16 - 1)).unwrap();
 
@@ -342,6 +359,13 @@ impl SteppedComputation {
 
 
         // Now we render out our liens.
+
+    }
+}
+
+impl Drop for SteppedComputationHandle {
+    fn drop(&mut self) {
+        self.finish();
 
     }
 }

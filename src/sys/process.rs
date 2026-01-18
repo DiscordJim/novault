@@ -1,7 +1,7 @@
 use std::{path::Path, process::Command};
 use anyhow::{Result, anyhow};
 
-use crate::sys::{procedure::actions::VaultState, statefile::StateFileHandle};
+use crate::{printing::SteppedComputationHandle, sys::{procedure::actions::VaultState, statefile::StateFileHandle}};
 
 
 
@@ -90,9 +90,14 @@ pub fn git_push_origin(root: &Path) -> Result<()> {
 }
 
 pub fn git_add_commit_push(root: &Path) -> Result<()> {
-    git_add_all(root)?;
-    git_commit_all(root)?;
-    git_push_origin(root)?;
+    let mut stepped = SteppedComputationHandle::start("Synchronizing with Git", 3);
+    stepped.start_next("Adding files", "Added files", || git_add_all(root))?;
+    stepped.start_next("Commiting files", "Commited files", || git_commit_all(root))?;
+    stepped.start_next("Pushing files", "Pushed files", || git_push_origin(root))?;
+    // git_add_all(root)?;
+    // git_commit_all(root)?;
+    // git_push_origin(root)?;
+    stepped.finish();
     Ok(())
 }
 

@@ -11,8 +11,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::{
-    console_log,
-    sys::{
+    console_log, printing::SteppedComputationHandle, sys::{
         common::{exists_git_repo, make_git_repo},
         filter::{FilterDecision, NovFilter},
         lib::path::{Normal, RootPath},
@@ -20,7 +19,7 @@ use crate::{
         procedure::sequence::{Playable, SEAL_FULL, UNSEAL_FULL},
         statefile::{StateFileHandle, SyncMethod},
         writer::{VaultWriter, decrypt},
-    },
+    }
 };
 
 #[derive(Debug, Clone, Copy, strum::EnumString, PartialEq, Eq)]
@@ -452,25 +451,29 @@ fn stash_external_git_repo(root: &RootPath<Normal>, context: &mut Context) -> Re
 }
 
 fn decrypt_zip(vault_path: &Path, master: &MasterVaultKey) -> Result<Vec<u8>> {
+    let mut stepped = SteppedComputationHandle::start(&format!("Decrypting zip"), 2);
     let mut header =
-        std::fs::read(vault_path).map_err(|e| anyhow!("Failed to read zip error: {e:?}"))?;
+        stepped.start_next("Reading .zip", "Read .zip", || std::fs::read(vault_path).map_err(|e| anyhow!("Failed to read zip error: {e:?}")))?;
 
     let mut vault = header.split_off(32);
 
-    decrypt(&mut header, &mut vault, master.key_bytes())?;
+    stepped.start_next("Decrypting bytes", "Decrypted bytes", || decrypt(&mut header, &mut vault, master.key_bytes()))?;
+    stepped.finish();
     Ok(vault)
 }
 
 fn decrypt_main_vault(root: &RootPath<Normal>, master: &mut Context) -> Result<()> {
-    let master_key = master.handle.get_wrapped_key()?;
+    let mut stepped = SteppedComputationHandle::start("Decrypting", 2);
+    
+    let master_key = stepped.start_next("Loading wrapped key", "Loaded wrapped key", || master.handle.get_wrapped_key())?;
     master.new_wrapped = Some(master_key.clone());
 
-    let master_key = master_key.get_master_key_with_no_rewrap(master.password)?;
+    let master_key = stepped.start_next("Decrypting master key", "Decrypted master key", || master_key.get_master_key_with_no_rewrap(master.password))?;
 
     master.master = Some(master_key.clone());
 
     master.decrypted_zip_bytes = Some(decrypt_zip(&root.vault_binary(), &master_key)?);
-
+    stepped.finish();
     Ok(())
 }
 

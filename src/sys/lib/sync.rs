@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use colorize::AnsiColor;
 
 use crate::{
-    console_log, sys::{
+    console_log, printing::SteppedComputationHandle, sys::{
         common::prompt_s3_access_key_and_pass, lib::{
             path::{Normal, RootPath},
             remote::t3::{get_snapshot_sig, t3_delete, t3_fetch, t3_put},
@@ -286,10 +286,13 @@ pub fn push_remote(path: &Path) -> Result<()> {
             // stepped.start_next("Commiting history", "Commited history", || git_commit_all(path.path()))?;
             // stepped.start_next("Pushing to remote", "Pushed to remote", || git_push_origin(path.path()))?;
             // stepped.finish();
+
+
+            // let mut stepped = SteppedComputationHandle::start("Synchronization", )
             
             
             // console_log!(Info, "Performing synchronization...");
-            // git_add_commit_push(path.path())?;
+            git_add_commit_push(path.path())?;
             // console_log!(Info, "Synchronization complete...");
         }
         SyncMethod::TigrisS3 => {
