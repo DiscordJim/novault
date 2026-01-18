@@ -4,13 +4,12 @@ use anyhow::{Result, anyhow};
 use colorize::AnsiColor;
 
 use crate::{
-    console_log,
-    sys::{
+    console_log, sys::{
         common::prompt_s3_access_key_and_pass, lib::{
             path::{Normal, RootPath},
             remote::t3::{get_snapshot_sig, t3_delete, t3_fetch, t3_put},
-        }, process::{add_remote_origin, git_add_commit_push, git_branch_main, git_clone}, statefile::{StateFileHandle, SyncMethod, read_hashmap, string_to_hashmap}
-    },
+        }, process::{add_remote_origin, git_add_all, git_add_commit_push, git_branch_main, git_clone, git_commit_all, git_push_origin}, statefile::{StateFileHandle, SyncMethod, read_hashmap, string_to_hashmap}
+    }
 };
 
 fn parse_link(url: &str) -> Result<String> {
@@ -281,9 +280,17 @@ pub fn push_remote(path: &Path) -> Result<()> {
 
     match sync {
         SyncMethod::Git => {
-            console_log!(Info, "Performing synchronization...");
-            git_add_commit_push(path.path())?;
-            console_log!(Info, "Synchronization complete...");
+
+            // let mut stepped = SteppedComputation::start("Synchronization with remote", 3);
+            // stepped.start_next("Adding files", "Added files", || git_add_all(path.path()))?;
+            // stepped.start_next("Commiting history", "Commited history", || git_commit_all(path.path()))?;
+            // stepped.start_next("Pushing to remote", "Pushed to remote", || git_push_origin(path.path()))?;
+            // stepped.finish();
+            
+            
+            // console_log!(Info, "Performing synchronization...");
+            // git_add_commit_push(path.path())?;
+            // console_log!(Info, "Synchronization complete...");
         }
         SyncMethod::TigrisS3 => {
             let bucket = state

@@ -18,20 +18,6 @@ pub fn run_init(root: impl AsRef<Path>) -> Result<()> {
     }
 
 
-    // if exists_metadata_directory(path) {
-    //     return Err(anyhow!("The target is already initialized."));
-    // } else {
-    //     // if !exists_git_repo(path) {
-    //     //     console_log!(Info, "Initializing a new git repository.");
-    //     //     make_git_repo(path)?;
-    //     // } else {
-    //     //     console_log!(Info, "There is already an existing git repository.");
-    //     // }
-
-    //     // Now we create the actual metadata directory.
-    //     create_metadata_directory(path)?;
-        
-    // }
 
     let mut password = prompt_password(true)?;
 
